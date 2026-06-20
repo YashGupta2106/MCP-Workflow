@@ -1,0 +1,1135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MCP Workflow Proxy — Hackathon Pitch</title>
+  <meta name="description" content="Reducing 133 raw Redfish API endpoints to 22 intelligent MCP workflow tools — achieving 83.5% tool reduction and 99.2% token savings." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:        #060912;
+      --bg2:       #0c1120;
+      --bg3:       #111827;
+      --border:    rgba(99,102,241,0.18);
+      --border2:   rgba(255,255,255,0.06);
+      --primary:   #6366f1;
+      --primary-l: #818cf8;
+      --accent:    #22d3ee;
+      --accent2:   #a78bfa;
+      --green:     #34d399;
+      --yellow:    #fbbf24;
+      --red:       #f87171;
+      --text:      #f1f5f9;
+      --muted:     #94a3b8;
+      --radius:    16px;
+      --glow:      0 0 40px rgba(99,102,241,0.25);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── Animated gradient background ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 20% 10%, rgba(99,102,241,0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 50% at 80% 80%, rgba(34,211,238,0.08) 0%, transparent 55%),
+        radial-gradient(ellipse 50% 40% at 60% 40%, rgba(167,139,250,0.06) 0%, transparent 50%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Scrolling grid ── */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(99,102,241,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99,102,241,0.04) 1px, transparent 1px);
+      background-size: 60px 60px;
+      animation: gridScroll 30s linear infinite;
+      pointer-events: none;
+      z-index: 0;
+    }
+    @keyframes gridScroll {
+      from { background-position: 0 0; }
+      to   { background-position: 60px 60px; }
+    }
+
+    /* ── Layout ── */
+    .page { position: relative; z-index: 1; }
+
+    /* ── NAV ── */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 40px;
+      height: 64px;
+      background: rgba(6,9,18,0.75);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border2);
+    }
+    .nav-logo {
+      font-weight: 800;
+      font-size: 1.1rem;
+      background: linear-gradient(135deg, var(--primary-l), var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.5px;
+    }
+    .nav-links { display: flex; gap: 32px; }
+    .nav-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-badge {
+      background: linear-gradient(135deg, var(--primary), var(--accent2));
+      padding: 4px 14px;
+      border-radius: 100px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+
+    /* ── HERO ── */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 120px 24px 80px;
+    }
+    .hero-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 18px;
+      background: rgba(99,102,241,0.12);
+      border: 1px solid rgba(99,102,241,0.3);
+      border-radius: 100px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--primary-l);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 32px;
+      animation: fadeUp 0.6s ease both;
+    }
+    .hero-tag::before {
+      content: '';
+      width: 6px; height: 6px;
+      background: var(--accent);
+      border-radius: 50%;
+      animation: pulse 2s ease infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(1.5); }
+    }
+    .hero h1 {
+      font-size: clamp(2.8rem, 6vw, 5rem);
+      font-weight: 900;
+      line-height: 1.1;
+      letter-spacing: -2px;
+      margin-bottom: 24px;
+      animation: fadeUp 0.6s 0.1s ease both;
+    }
+    .hero h1 .grad {
+      background: linear-gradient(135deg, var(--primary-l) 0%, var(--accent) 50%, var(--accent2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero p {
+      font-size: 1.2rem;
+      color: var(--muted);
+      max-width: 600px;
+      margin: 0 auto 48px;
+      line-height: 1.7;
+      animation: fadeUp 0.6s 0.2s ease both;
+    }
+
+    /* ── BIG STAT CARDS ── */
+    .hero-stats {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      justify-content: center;
+      animation: fadeUp 0.6s 0.3s ease both;
+    }
+    .stat-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 36px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+      backdrop-filter: blur(10px);
+      transition: transform 0.3s, box-shadow 0.3s;
+    }
+    .stat-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--glow);
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--primary), var(--accent));
+    }
+    .stat-val {
+      font-size: 3rem;
+      font-weight: 900;
+      letter-spacing: -2px;
+      line-height: 1;
+      background: linear-gradient(135deg, #fff 0%, var(--primary-l) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .stat-val.green { background: linear-gradient(135deg, var(--green), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .stat-label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 6px;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── SECTION ── */
+    section {
+      padding: 100px 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .section-tag {
+      display: inline-block;
+      padding: 4px 14px;
+      background: rgba(99,102,241,0.1);
+      border: 1px solid rgba(99,102,241,0.25);
+      border-radius: 100px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--primary-l);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    .section-title {
+      font-size: clamp(1.8rem, 3vw, 2.6rem);
+      font-weight: 800;
+      letter-spacing: -1px;
+      line-height: 1.2;
+      margin-bottom: 12px;
+    }
+    .section-sub {
+      color: var(--muted);
+      font-size: 1rem;
+      max-width: 540px;
+      line-height: 1.7;
+      margin-bottom: 56px;
+    }
+
+    /* ── BEFORE / AFTER COMPARISON ── */
+    .compare-grid {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 24px;
+      align-items: center;
+    }
+    .compare-box {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 32px;
+      backdrop-filter: blur(10px);
+    }
+    .compare-box.before { border-color: rgba(248,113,113,0.25); }
+    .compare-box.after  { border-color: rgba(52,211,153,0.25); }
+    .compare-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    .before .compare-label { color: var(--red); }
+    .after  .compare-label { color: var(--green); }
+    .compare-number {
+      font-size: 4rem;
+      font-weight: 900;
+      letter-spacing: -3px;
+      line-height: 1;
+    }
+    .before .compare-number { color: var(--red); }
+    .after  .compare-number { color: var(--green); }
+    .compare-desc {
+      color: var(--muted);
+      font-size: 0.875rem;
+      margin-top: 8px;
+      line-height: 1.5;
+    }
+    .compare-items {
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .compare-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .dot-red   { background: var(--red); }
+    .dot-green { background: var(--green); }
+    .dot-blue  { background: var(--primary-l); }
+    .arrow-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .arrow-pct {
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      border-radius: 12px;
+      padding: 12px 20px;
+      font-size: 1.6rem;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+    .arrow-label { font-size: 0.72rem; color: var(--muted); font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
+
+    /* ── CHARTS GRID ── */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    .chart-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 28px;
+      backdrop-filter: blur(10px);
+      transition: transform 0.3s, box-shadow 0.3s;
+    }
+    .chart-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 30px rgba(99,102,241,0.15);
+    }
+    .chart-card h3 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .chart-card p {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 24px;
+    }
+
+    /* ── PIPELINE ── */
+    .pipeline {
+      display: flex;
+      gap: 0;
+      align-items: stretch;
+      overflow-x: auto;
+      padding-bottom: 8px;
+    }
+    .pipeline-step {
+      flex: 1;
+      min-width: 180px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 24px 20px;
+      position: relative;
+      transition: transform 0.3s, box-shadow 0.3s, border-color 0.3s;
+      cursor: default;
+    }
+    .pipeline-step:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 0 30px rgba(99,102,241,0.2);
+      border-color: var(--primary);
+    }
+    .pipeline-step + .pipeline-step { margin-left: 12px; }
+    .pipeline-step + .pipeline-step::before {
+      content: '';
+      position: absolute;
+      left: -18px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 24px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--primary));
+      z-index: 1;
+    }
+    .step-num {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 800;
+      margin-bottom: 12px;
+    }
+    .step-title { font-size: 0.9rem; font-weight: 700; margin-bottom: 4px; }
+    .step-name  { font-size: 0.72rem; font-weight: 600; margin-bottom: 10px; }
+    .step-desc  { font-size: 0.75rem; color: var(--muted); line-height: 1.5; }
+    .step-badge {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 0.68rem;
+      font-weight: 700;
+    }
+
+    .p1 .step-num { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .p1 .step-name { color: var(--yellow); }
+    .p2 .step-num { background: rgba(99,102,241,0.15); color: var(--primary-l); }
+    .p2 .step-name { color: var(--primary-l); }
+    .p3 .step-num { background: rgba(34,211,238,0.15); color: var(--accent); }
+    .p3 .step-name { color: var(--accent); }
+    .p4 .step-num { background: rgba(167,139,250,0.15); color: var(--accent2); }
+    .p4 .step-name { color: var(--accent2); }
+    .p5 .step-num { background: rgba(52,211,153,0.15); color: var(--green); }
+    .p5 .step-name { color: var(--green); }
+
+    /* ── WORKFLOW CARDS ── */
+    .wf-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .wf-card {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border2);
+      border-radius: 12px;
+      padding: 20px;
+      transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+      cursor: default;
+    }
+    .wf-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 0 20px rgba(99,102,241,0.2);
+      border-color: rgba(99,102,241,0.35);
+    }
+    .wf-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .wf-name {
+      font-size: 0.82rem;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--primary-l);
+      word-break: break-all;
+    }
+    .cat-badge {
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 100px;
+      flex-shrink: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .cat-monitoring   { background: rgba(34,211,238,0.12); color: var(--accent); }
+    .cat-configuration{ background: rgba(99,102,241,0.12); color: var(--primary-l); }
+    .cat-lifecycle    { background: rgba(251,191,36,0.12); color: var(--yellow); }
+    .cat-maintenance  { background: rgba(167,139,250,0.12); color: var(--accent2); }
+    .cat-security     { background: rgba(248,113,113,0.12); color: var(--red); }
+    .wf-desc { font-size: 0.75rem; color: var(--muted); line-height: 1.5; margin-bottom: 12px; }
+    .wf-meta {
+      display: flex;
+      gap: 12px;
+      font-size: 0.7rem;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .wf-meta span { display: flex; align-items: center; gap: 4px; }
+
+    /* ── HOW IT WORKS ── */
+    .how-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+    .how-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 28px 24px;
+      transition: transform 0.3s;
+    }
+    .how-card:hover { transform: translateY(-4px); }
+    .how-icon {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.4rem;
+      margin-bottom: 16px;
+    }
+    .how-card h3 { font-size: 1rem; font-weight: 700; margin-bottom: 8px; }
+    .how-card p  { font-size: 0.82rem; color: var(--muted); line-height: 1.6; }
+
+    /* ── DEMO PROMPTS ── */
+    .prompts-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .prompt-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border2);
+      border-radius: 12px;
+      padding: 20px 24px;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+      transition: border-color 0.3s, box-shadow 0.3s;
+    }
+    .prompt-card:hover {
+      border-color: rgba(99,102,241,0.35);
+      box-shadow: 0 0 20px rgba(99,102,241,0.1);
+    }
+    .prompt-icon {
+      width: 36px; height: 36px;
+      border-radius: 8px;
+      background: rgba(99,102,241,0.12);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem;
+      flex-shrink: 0;
+    }
+    .prompt-text {
+      font-size: 0.875rem;
+      font-style: italic;
+      color: var(--text);
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+    .prompt-arrow {
+      font-size: 0.72rem;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .prompt-tool {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--primary-l);
+      font-weight: 600;
+    }
+
+    /* ── CONFIG BLOCK ── */
+    .config-block {
+      background: var(--bg3);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .config-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      background: rgba(255,255,255,0.03);
+      border-bottom: 1px solid var(--border2);
+    }
+    .config-dots { display: flex; gap: 6px; }
+    .config-dots span {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+    }
+    .config-dots span:nth-child(1) { background: #ff5f57; }
+    .config-dots span:nth-child(2) { background: #febc2e; }
+    .config-dots span:nth-child(3) { background: #28c840; }
+    .config-title { font-size: 0.78rem; color: var(--muted); font-weight: 500; }
+    pre {
+      padding: 24px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      line-height: 1.7;
+      color: #e2e8f0;
+      overflow-x: auto;
+    }
+    .json-key   { color: #93c5fd; }
+    .json-str   { color: #86efac; }
+    .json-num   { color: #fca5a5; }
+    .json-bool  { color: #fcd34d; }
+
+    /* ── FOOTER ── */
+    footer {
+      text-align: center;
+      padding: 60px 24px;
+      border-top: 1px solid var(--border2);
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    footer strong { color: var(--text); }
+
+    /* ── COUNTER ANIMATION ── */
+    .counting { display: inline-block; }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 768px) {
+      nav { padding: 0 16px; }
+      .nav-links { display: none; }
+      .compare-grid { grid-template-columns: 1fr; }
+      .arrow-box { flex-direction: row; justify-content: center; }
+      .charts-grid { grid-template-columns: 1fr; }
+      .how-grid { grid-template-columns: 1fr; }
+      .prompts-grid { grid-template-columns: 1fr; }
+      .pipeline { flex-direction: column; }
+      .pipeline-step + .pipeline-step { margin-left: 0; margin-top: 16px; }
+      .pipeline-step + .pipeline-step::before { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- NAV -->
+  <nav>
+    <div class="nav-logo">MCP Workflow Proxy</div>
+    <div class="nav-links">
+      <a href="#metrics">Metrics</a>
+      <a href="#pipeline">Pipeline</a>
+      <a href="#workflows">Workflows</a>
+      <a href="#demo">Demo</a>
+      <a href="#setup">Setup</a>
+    </div>
+    <div class="nav-badge">Hackathon 2025</div>
+  </nav>
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="hero-tag">Model Context Protocol · Redfish API</div>
+    <h1>
+      <span class="grad">133 Endpoints.</span><br/>
+      22 Intelligent Tools.
+    </h1>
+    <p>
+      We collapsed a 410,000-token Redfish API spec into 22 smart MCP workflow tools —
+      an <strong>83.5% tool reduction</strong> that lets Claude manage entire server
+      infrastructure with plain English.
+    </p>
+    <div class="hero-stats">
+      <div class="stat-card">
+        <div class="stat-val green counting" data-target="83.5" data-suffix="%">0%</div>
+        <div class="stat-label">Tool Reduction</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val counting" data-target="99.2" data-suffix="%">0%</div>
+        <div class="stat-label">Token Savings</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val counting" data-target="19" data-suffix="">0</div>
+        <div class="stat-label">Workflow Tools</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val counting" data-target="133" data-suffix="">0</div>
+        <div class="stat-label">Endpoints Covered</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- METRICS SECTION -->
+  <section id="metrics">
+    <div class="section-tag">The Numbers</div>
+    <h2 class="section-title">Before vs After</h2>
+    <p class="section-sub">From a raw API dump that overwhelms any LLM, to a clean set of semantic workflow tools.</p>
+
+    <div class="compare-grid">
+      <!-- BEFORE -->
+      <div class="compare-box before">
+        <div class="compare-label">Before — Raw Redfish</div>
+        <div class="compare-number">133</div>
+        <div class="compare-desc">Individual API endpoints exposed directly to the AI as separate tools</div>
+        <div class="compare-items">
+          <div class="compare-item"><span class="dot dot-red"></span>GET /redfish/v1/Systems/{SystemId}</div>
+          <div class="compare-item"><span class="dot dot-red"></span>PATCH /redfish/v1/Systems/{SystemId}</div>
+          <div class="compare-item"><span class="dot dot-red"></span>GET /redfish/v1/Chassis/{ChassisId}/Thermal</div>
+          <div class="compare-item"><span class="dot dot-red"></span>POST /redfish/v1/UpdateService/Actions/...</div>
+          <div class="compare-item"><span class="dot dot-red"></span>+ 129 more raw endpoints...</div>
+        </div>
+      </div>
+
+      <!-- ARROW -->
+      <div class="arrow-box">
+        <div style="font-size:2rem;">→</div>
+        <div class="arrow-pct">−83.5%</div>
+        <div class="arrow-label">tools</div>
+      </div>
+
+      <!-- AFTER -->
+      <div class="compare-box after">
+        <div class="compare-label">After — MCP Workflow Proxy</div>
+        <div class="compare-number">22</div>
+        <div class="compare-desc">Semantic workflow tools + hierarchical escape hatch for edge cases</div>
+        <div class="compare-items">
+          <div class="compare-item"><span class="dot dot-green"></span>server_health_check</div>
+          <div class="compare-item"><span class="dot dot-green"></span>firmware_update</div>
+          <div class="compare-item"><span class="dot dot-green"></span>storage_management</div>
+          <div class="compare-item"><span class="dot dot-blue"></span>list_raw_endpoints (tier toggle)</div>
+          <div class="compare-item"><span class="dot dot-blue"></span>run_raw_endpoint (escape hatch)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CHARTS -->
+    <div class="charts-grid" style="margin-top:40px;">
+      <div class="chart-card">
+        <h3>Tool Count Comparison</h3>
+        <p>133 raw endpoints collapsed into 22 semantic MCP tools</p>
+        <canvas id="toolChart" height="200"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>Token Usage Comparison</h3>
+        <p>From 410,562 tokens to just 3,374 — a 99.2% reduction</p>
+        <canvas id="tokenChart" height="200"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>Workflow Categories</h3>
+        <p>19 workflows distributed across 5 operational domains</p>
+        <canvas id="categoryChart" height="200"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>Endpoints Covered Per Workflow</h3>
+        <p>Each workflow abstracts multiple raw Redfish endpoints</p>
+        <canvas id="coverageChart" height="200"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <!-- PIPELINE SECTION -->
+  <section id="pipeline">
+    <div class="section-tag">Team Architecture</div>
+    <h2 class="section-title">The 5-Person Pipeline</h2>
+    <p class="section-sub">Each person's output becomes the next person's input — a clean dependency chain.</p>
+
+    <div class="pipeline">
+      <div class="pipeline-step p1">
+        <div class="step-num">1</div>
+        <div class="step-title">The Foundation</div>
+        <div class="step-name">Data & Mock Engineer</div>
+        <div class="step-desc">Downloads DMTF Redfish OpenAPI specs. Runs Prism mock server on :4010. Measures baseline token counts for the raw 133 endpoints.</div>
+        <div class="step-badge" style="background:rgba(251,191,36,0.12);color:var(--yellow);">→ workflows.yaml input</div>
+      </div>
+
+      <div class="pipeline-step p2">
+        <div class="step-num">2</div>
+        <div class="step-title">The Brains</div>
+        <div class="step-name">AI Clustering Architect</div>
+        <div class="step-desc">Sends the 133 raw endpoints to Claude once. Instructs it to group them into 19 smart master-switches and outputs workflows.yaml.</div>
+        <div class="step-badge" style="background:rgba(99,102,241,0.12);color:var(--primary-l);">→ workflow_engine.py input</div>
+      </div>
+
+      <div class="pipeline-step p3">
+        <div class="step-num">3</div>
+        <div class="step-title">The Heart</div>
+        <div class="step-name">Runtime Engine Builder</div>
+        <div class="step-desc">Reads workflows.yaml and runs each workflow step-by-step: calls Prism, extracts variables, handles branching and loops.</div>
+        <div class="step-badge" style="background:rgba(34,211,238,0.12);color:var(--accent);">→ mcp_server.py input</div>
+      </div>
+
+      <div class="pipeline-step p4">
+        <div class="step-num">4</div>
+        <div class="step-title">The Connector</div>
+        <div class="step-name">MCP Server Developer</div>
+        <div class="step-desc">Wraps the engine in a FastMCP server exposing 22 tools. Adds hierarchical tier-toggle so Claude can drill into raw endpoints when needed.</div>
+        <div class="step-badge" style="background:rgba(167,139,250,0.12);color:var(--accent2);">→ Claude Desktop input</div>
+      </div>
+
+      <div class="pipeline-step p5">
+        <div class="step-num">5</div>
+        <div class="step-title">The Closer</div>
+        <div class="step-name">Integrator & Pitch Master</div>
+        <div class="step-desc">Wires MCP server into Claude Desktop. Tests natural language commands end-to-end. Calculates final metrics. Builds this pitch deck.</div>
+        <div class="step-badge" style="background:rgba(52,211,153,0.12);color:var(--green);">→ Hackathon judges</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WORKFLOWS SECTION -->
+  <section id="workflows">
+    <div class="section-tag">The 19 Workflow Tools</div>
+    <h2 class="section-title">From 133 Buttons to 19 Smart Switches</h2>
+    <p class="section-sub">Each tool abstracts multiple raw Redfish endpoints into a single, semantic, AI-friendly operation.</p>
+
+    <div class="wf-grid" id="workflowGrid">
+      <!-- populated by JS -->
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section id="how">
+    <div class="section-tag">Innovation</div>
+    <h2 class="section-title">How It Works</h2>
+    <p class="section-sub">Three key innovations that make this solution production-ready.</p>
+
+    <div class="how-grid">
+      <div class="how-card">
+        <div class="how-icon" style="background:rgba(99,102,241,0.12);">🧠</div>
+        <h3>Design-Time AI Clustering</h3>
+        <p>We call Claude <em>once</em> at design time to cluster 133 raw endpoints into 19 semantic workflows. The AI only pays the cognitive cost once — not on every user request.</p>
+      </div>
+      <div class="how-card">
+        <div class="how-icon" style="background:rgba(34,211,238,0.12);">⚡</div>
+        <h3>Runtime Execution Engine</h3>
+        <p>A pure-Python workflow runner reads the YAML blueprint and executes step-by-step HTTP calls, handles conditions, loops, variable chaining — zero LLM calls at runtime.</p>
+      </div>
+      <div class="how-card">
+        <div class="how-icon" style="background:rgba(52,211,153,0.12);">🎛️</div>
+        <h3>Hierarchical Exposure</h3>
+        <p>When a high-level workflow hits an edge case, Claude calls <code>list_raw_endpoints</code> to reveal the underlying Redfish calls. It drops to surgical precision only when needed.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- DEMO PROMPTS -->
+  <section id="demo">
+    <div class="section-tag">Live Demo</div>
+    <h2 class="section-title">Natural Language → Infrastructure Actions</h2>
+    <p class="section-sub">Type these prompts into Claude Desktop after wiring in the MCP server.</p>
+
+    <div class="prompts-grid">
+      <div class="prompt-card">
+        <div class="prompt-icon">🖥️</div>
+        <div>
+          <div class="prompt-text">"Check the health of server Server1"</div>
+          <div class="prompt-arrow">→ invokes <span class="prompt-tool">server_health_check</span></div>
+        </div>
+      </div>
+      <div class="prompt-card">
+        <div class="prompt-icon">💾</div>
+        <div>
+          <div class="prompt-text">"Update the firmware on my server rack"</div>
+          <div class="prompt-arrow">→ invokes <span class="prompt-tool">firmware_update</span></div>
+        </div>
+      </div>
+      <div class="prompt-card">
+        <div class="prompt-icon">📋</div>
+        <div>
+          <div class="prompt-text">"Show me all available workflows"</div>
+          <div class="prompt-arrow">→ invokes <span class="prompt-tool">list_workflows_meta</span></div>
+        </div>
+      </div>
+      <div class="prompt-card">
+        <div class="prompt-icon">🌡️</div>
+        <div>
+          <div class="prompt-text">"Is my chassis overheating? Check the fans too."</div>
+          <div class="prompt-arrow">→ invokes <span class="prompt-tool">thermal_and_power_monitoring</span></div>
+        </div>
+      </div>
+      <div class="prompt-card">
+        <div class="prompt-icon">🔒</div>
+        <div>
+          <div class="prompt-text">"Enable Secure Boot on system S1"</div>
+          <div class="prompt-arrow">→ invokes <span class="prompt-tool">secure_boot_management</span></div>
+        </div>
+      </div>
+      <div class="prompt-card">
+        <div class="prompt-icon">🔧</div>
+        <div>
+          <div class="prompt-text">"The workflow failed — show me the raw endpoints for firmware_update"</div>
+          <div class="prompt-arrow">→ invokes <span class="prompt-tool">list_raw_endpoints</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SETUP SECTION -->
+  <section id="setup">
+    <div class="section-tag">Integration</div>
+    <h2 class="section-title">Connect to Claude Desktop</h2>
+    <p class="section-sub">Add this snippet to your <code>claude_desktop_config.json</code> and restart Claude.</p>
+
+    <div class="config-block">
+      <div class="config-header">
+        <div class="config-dots"><span></span><span></span><span></span></div>
+        <div class="config-title">claude_desktop_config.json</div>
+        <button onclick="copyConfig()" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);color:var(--primary-l);padding:4px 14px;border-radius:6px;cursor:pointer;font-size:0.75rem;font-weight:600;" id="copyBtn">Copy</button>
+      </div>
+      <pre id="configJson"><span class="json-key">{
+  "mcpServers"</span>: {
+    <span class="json-key">"redfish-workflow-proxy"</span>: {
+      <span class="json-key">"command"</span>: <span class="json-str">"python"</span>,
+      <span class="json-key">"args"</span>: [<span class="json-str">"C:\\path\\to\\MCP-Workflow\\mcp_server.py"</span>],
+      <span class="json-key">"env"</span>: {}
+    }
+  }
+}</pre>
+    </div>
+
+    <div class="how-grid" style="margin-top:32px;">
+      <div class="how-card">
+        <div class="how-icon" style="background:rgba(251,191,36,0.12);">1️⃣</div>
+        <h3>Start the Mock Server</h3>
+        <p>Run <code style="color:var(--accent);">npx @stoplight/prism-cli mock specs/merged/full_spec.yaml</code> to start Person 1's Prism server on port 4010.</p>
+      </div>
+      <div class="how-card">
+        <div class="how-icon" style="background:rgba(99,102,241,0.12);">2️⃣</div>
+        <h3>Add Config &amp; Restart</h3>
+        <p>Paste the config snippet into your Claude Desktop config file (shown above), update the path, then fully restart Claude Desktop.</p>
+      </div>
+      <div class="how-card">
+        <div class="how-icon" style="background:rgba(52,211,153,0.12);">3️⃣</div>
+        <h3>Start Prompting</h3>
+        <p>Type any of the demo prompts and watch Claude discover and invoke your 22 MCP tools — no raw endpoint knowledge needed.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <p>Built by <strong>5 engineers</strong> · MCP Workflow Proxy · Hackathon 2025</p>
+    <p style="margin-top:8px;">133 Endpoints → 22 Tools · 83.5% Tool Reduction · 99.2% Token Savings</p>
+  </footer>
+
+</div>
+
+<script>
+  // ── Workflow data ──────────────────────────────────────────────────────────
+  const WORKFLOWS = [
+    { name: "discover_service_root",       cat: "monitoring",     steps: 1,  eps: 1,  params: 0 },
+    { name: "server_health_check",         cat: "monitoring",     steps: 8,  eps: 7,  params: 2 },
+    { name: "hardware_inventory_report",   cat: "monitoring",     steps: 11, eps: 11, params: 2 },
+    { name: "thermal_and_power_monitoring",cat: "monitoring",     steps: 17, eps: 16, params: 2 },
+    { name: "storage_management",          cat: "configuration",  steps: 10, eps: 10, params: 4 },
+    { name: "server_power_operations",     cat: "lifecycle",      steps: 3,  eps: 3,  params: 2 },
+    { name: "bios_configuration",          cat: "configuration",  steps: 6,  eps: 6,  params: 2 },
+    { name: "secure_boot_management",      cat: "security",       steps: 3,  eps: 3,  params: 1 },
+    { name: "firmware_update",             cat: "maintenance",    steps: 7,  eps: 8,  params: 4 },
+    { name: "network_configuration",       cat: "configuration",  steps: 5,  eps: 6,  params: 3 },
+    { name: "bmc_manager_operations",      cat: "lifecycle",      steps: 6,  eps: 7,  params: 2 },
+    { name: "user_account_management",     cat: "security",       steps: 6,  eps: 7,  params: 4 },
+    { name: "session_management",          cat: "security",       steps: 4,  eps: 4,  params: 2 },
+    { name: "event_subscription_management",cat:"configuration",  steps: 6,  eps: 6,  params: 3 },
+    { name: "log_collection",              cat: "monitoring",     steps: 6,  eps: 6,  params: 3 },
+    { name: "certificate_management",      cat: "security",       steps: 6,  eps: 6,  params: 4 },
+    { name: "virtual_media_operations",    cat: "lifecycle",      steps: 5,  eps: 6,  params: 3 },
+    { name: "telemetry_metrics_collection",cat: "monitoring",     steps: 5,  eps: 6,  params: 2 },
+    { name: "task_management",             cat: "lifecycle",      steps: 4,  eps: 4,  params: 2 },
+  ];
+
+  // Render workflow cards
+  const grid = document.getElementById('workflowGrid');
+  WORKFLOWS.forEach(wf => {
+    grid.innerHTML += `
+      <div class="wf-card">
+        <div class="wf-header">
+          <div class="wf-name">${wf.name}</div>
+          <div class="cat-badge cat-${wf.cat}">${wf.cat}</div>
+        </div>
+        <div class="wf-meta">
+          <span>⚡ ${wf.steps} steps</span>
+          <span>📡 ${wf.eps} endpoints</span>
+          <span>⚙️ ${wf.params} params</span>
+        </div>
+      </div>`;
+  });
+
+  // ── Animated counters ──────────────────────────────────────────────────────
+  function animateCounter(el) {
+    const target  = parseFloat(el.dataset.target);
+    const suffix  = el.dataset.suffix || '';
+    const isFloat = target % 1 !== 0;
+    const duration = 1800;
+    const startTime = performance.now();
+
+    function update(now) {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const ease = 1 - Math.pow(1 - progress, 3);
+      const val = target * ease;
+      el.textContent = (isFloat ? val.toFixed(1) : Math.round(val)) + suffix;
+      if (progress < 1) requestAnimationFrame(update);
+    }
+    requestAnimationFrame(update);
+  }
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        animateCounter(e.target);
+        observer.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.3 });
+
+  document.querySelectorAll('.counting').forEach(el => observer.observe(el));
+
+  // ── Charts ─────────────────────────────────────────────────────────────────
+  Chart.defaults.color = '#94a3b8';
+  Chart.defaults.borderColor = 'rgba(255,255,255,0.05)';
+
+  const chartFont = { family: 'Inter', size: 12 };
+
+  // Tool count chart
+  new Chart(document.getElementById('toolChart'), {
+    type: 'bar',
+    data: {
+      labels: ['Raw Endpoints\n(Before)', 'MCP Tools\n(After)'],
+      datasets: [{
+        data: [133, 22],
+        backgroundColor: ['rgba(248,113,113,0.6)', 'rgba(52,211,153,0.6)'],
+        borderColor:      ['rgba(248,113,113,1)',   'rgba(52,211,153,1)'],
+        borderWidth: 1,
+        borderRadius: 8,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            afterLabel: ctx => ctx.dataIndex === 1 ? '83.5% reduction' : ''
+          }
+        }
+      },
+      scales: {
+        y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { font: chartFont } },
+        x: { grid: { display: false }, ticks: { font: chartFont } }
+      }
+    }
+  });
+
+  // Token chart
+  new Chart(document.getElementById('tokenChart'), {
+    type: 'bar',
+    data: {
+      labels: ['Full Spec\n(Before)', 'MCP Tools\n(After)'],
+      datasets: [{
+        data: [410562, 3374],
+        backgroundColor: ['rgba(248,113,113,0.6)', 'rgba(52,211,153,0.6)'],
+        borderColor:      ['rgba(248,113,113,1)',   'rgba(52,211,153,1)'],
+        borderWidth: 1,
+        borderRadius: 8,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.parsed.y.toLocaleString()} tokens`,
+            afterLabel: ctx => ctx.dataIndex === 1 ? '99.2% reduction' : ''
+          }
+        }
+      },
+      scales: {
+        y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { font: chartFont, callback: v => v.toLocaleString() } },
+        x: { grid: { display: false }, ticks: { font: chartFont } }
+      }
+    }
+  });
+
+  // Category donut
+  const catCounts = WORKFLOWS.reduce((acc, w) => { acc[w.cat] = (acc[w.cat]||0)+1; return acc; }, {});
+  new Chart(document.getElementById('categoryChart'), {
+    type: 'doughnut',
+    data: {
+      labels: Object.keys(catCounts).map(c => c.charAt(0).toUpperCase()+c.slice(1)),
+      datasets: [{
+        data: Object.values(catCounts),
+        backgroundColor: ['rgba(34,211,238,0.7)','rgba(99,102,241,0.7)','rgba(251,191,36,0.7)','rgba(167,139,250,0.7)','rgba(248,113,113,0.7)'],
+        borderWidth: 0,
+        hoverOffset: 8,
+      }]
+    },
+    options: {
+      responsive: true,
+      cutout: '65%',
+      plugins: {
+        legend: { position: 'right', labels: { font: chartFont, boxWidth: 12, padding: 16 } }
+      }
+    }
+  });
+
+  // Coverage horizontal bar
+  const sorted = [...WORKFLOWS].sort((a,b) => b.eps - a.eps).slice(0,10);
+  new Chart(document.getElementById('coverageChart'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(w => w.name.replace(/_/g,' ')),
+      datasets: [{
+        data: sorted.map(w => w.eps),
+        backgroundColor: 'rgba(99,102,241,0.6)',
+        borderColor: 'rgba(99,102,241,1)',
+        borderWidth: 1,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { font: chartFont } },
+        y: { grid: { display: false }, ticks: { font: { family:'Inter', size:10 } } }
+      }
+    }
+  });
+
+  // ── Copy config ──────────────────────────────────────────────────────────
+  function copyConfig() {
+    const raw = `{
+  "mcpServers": {
+    "redfish-workflow-proxy": {
+      "command": "python",
+      "args": ["C:\\\\path\\\\to\\\\MCP-Workflow\\\\mcp_server.py"],
+      "env": {}
+    }
+  }
+}`;
+    navigator.clipboard.writeText(raw).then(() => {
+      const btn = document.getElementById('copyBtn');
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = 'Copy', 2000);
+    });
+  }
+</script>
+</body>
+</html>
