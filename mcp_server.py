@@ -16,6 +16,7 @@ Usage:
 
 import json
 import logging
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from workflow_engine import WorkflowEngine
@@ -31,7 +32,7 @@ mcp = FastMCP("Redfish Workflow Proxy")
 
 # Create the engine — adjust base_url if Person 1's Prism runs on a different port
 engine = WorkflowEngine(
-    workflows_file="workflows.yaml",
+    workflows_file=str(Path(__file__).parent / "workflows.yaml"),
     base_url="http://localhost:4010",   # Prism default port is 4010
 )
 
