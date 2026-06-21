@@ -11,10 +11,10 @@
   },
   "token_counts": {
     "full_spec_before_tokens": 410562,
-    "mcp_tool_descriptions_tokens": 3621,
-    "raw_as_tools_tokens": 12595,
-    "vs_raw_as_tools_reduction_pct": 71.3,
-    "vs_full_spec_reduction_pct": 99.1
+    "mcp_tool_descriptions_tokens": 3058,
+    "raw_as_tools_tokens": 12084,
+    "vs_raw_as_tools_reduction_pct": 74.7,
+    "vs_full_spec_reduction_pct": 99.3
   },
   "workflow_breakdown": [
     {
