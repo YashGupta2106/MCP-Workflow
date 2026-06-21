@@ -2,19 +2,19 @@
   "person5_calculated": true,
   "tool_counts": {
     "before_tools": 133,
-    "after_tools": 22,
-    "workflow_tools": 19,
+    "after_tools": 24,
+    "workflow_tools": 21,
     "meta_tools": 3,
-    "tool_reduction_count": 111,
-    "tool_reduction_pct": 83.5,
+    "tool_reduction_count": 109,
+    "tool_reduction_pct": 82.0,
     "meets_80pct_threshold": true
   },
   "token_counts": {
     "full_spec_before_tokens": 410562,
-    "mcp_tool_descriptions_tokens": 3374,
-    "raw_as_tools_tokens": 12595,
-    "vs_raw_as_tools_reduction_pct": 73.2,
-    "vs_full_spec_reduction_pct": 99.2
+    "mcp_tool_descriptions_tokens": 3058,
+    "raw_as_tools_tokens": 12084,
+    "vs_raw_as_tools_reduction_pct": 74.7,
+    "vs_full_spec_reduction_pct": 99.3
   },
   "workflow_breakdown": [
     {
@@ -149,6 +149,20 @@
       "step_count": 4,
       "raw_endpoints_covered": 4,
       "parameters": 1
+    },
+    {
+      "name": "health_guarded_firmware_update",
+      "category": "maintenance",
+      "step_count": 3,
+      "raw_endpoints_covered": 3,
+      "parameters": 2
+    },
+    {
+      "name": "clear_system_logs",
+      "category": "diagnostics",
+      "step_count": 2,
+      "raw_endpoints_covered": 2,
+      "parameters": 2
     }
   ],
   "categories": {
@@ -156,7 +170,7 @@
     "configuration": 4,
     "lifecycle": 2,
     "security": 4,
-    "maintenance": 2,
-    "diagnostics": 2
+    "maintenance": 3,
+    "diagnostics": 3
   }
 }
