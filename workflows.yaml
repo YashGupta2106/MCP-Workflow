@@ -1,1799 +1,2000 @@
 meta:
   spec_source: DMTF Redfish API
   generated_by: claude
-  total_workflows: 19
-  total_raw_endpoints: 133
+  total_workflows: 21
+  total_raw_endpoints: 142
   schema_extensions:
-    note: 'The following optional fields extend the base schema. They are backward-compatible: a runtime that does not understand them can ignore them and the workflow still executes correctly as a linear/branching step list.'
-    break_if: Optional string on a step that has loop_over. A boolean expression over extracted variables; when it evaluates true the runtime stops iterating the loop early (e.g., stop scanning drives once a fault is found).
-    next_workflows: 'Optional list at the workflow level suggesting follow-on workflows for cross-workflow chaining. Each item: {workflow: <name>, if: <condition expr>, reason: <text>}. The orchestrator MAY invoke the named workflow when the condition holds. This is advisory chaining, not an automatic call.'
+    note: 'The following optional fields extend the base schema. They are backward-compatible:
+      a runtime that does not understand them can ignore them and the workflow still
+      executes correctly as a linear/branching step list.'
+    break_if: Optional string on a step that has loop_over. A boolean expression over
+      extracted variables; when it evaluates true the runtime stops iterating the
+      loop early (e.g., stop scanning drives once a fault is found).
+    next_workflows: 'Optional list at the workflow level suggesting follow-on workflows
+      for cross-workflow chaining. Each item: {workflow: <name>, if: <condition expr>,
+      reason: <text>}. The orchestrator MAY invoke the named workflow when the condition
+      holds. This is advisory chaining, not an automatic call.'
 workflows:
-  - name: discover_service_root
-    category: monitoring
-    description: Query the Redfish service root to discover the API version and the top-level service links (Systems, Chassis, Managers, etc.). Usually the first call when connecting to a new BMC.
-    parameters: []
-    steps:
-      - step_id: get_root
-        description: Fetch the Redfish service root document.
-        action: GET
-        endpoint: /redfish/v1
-        extract:
-          redfish_version: $.RedfishVersion
-          systems_uri: $.Systems.@odata.id
-          chassis_uri: $.Chassis.@odata.id
-          managers_uri: $.Managers.@odata.id
-    raw_endpoints:
-      - GET /redfish/v1
-    output_template: |-
-      ## Redfish Service Root
-      | Property | Value |
-      |----------|-------|
-      | Redfish Version | {redfish_version} |
-      | Systems | {systems_uri} |
-      | Chassis | {chassis_uri} |
-      | Managers | {managers_uri} |
-  - name: server_health_check
-    category: monitoring
-    description: 'Run a top-to-bottom health assessment of a server: overall status, power state, and processor/memory health. If overall health is not OK, it automatically drills into chassis thermal data to look for a root cause.'
-    parameters:
-      - name: SystemId
-        type: string
-        required: false
-        description: Target system identifier. If omitted, the first system in the collection is used.
-        default: first member of /redfish/v1/Systems
-      - name: ChassisId
-        type: string
-        required: false
-        description: Chassis to inspect for thermal data when health is degraded.
-        default: first member of /redfish/v1/Chassis
-    steps:
-      - step_id: list_systems
-        description: List all computer systems.
-        action: GET
-        endpoint: /redfish/v1/Systems
-        extract:
-          system_members: $.Members[*].@odata.id
-          system_count: $.Members@odata.count
-      - step_id: get_system
-        description: Retrieve the target system instance.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}
-        extract:
-          health_status: $.Status.Health
-          power_state: $.PowerState
-          cpu_summary_health: $.ProcessorSummary.Status.Health
-          mem_summary_health: $.MemorySummary.Status.Health
-      - step_id: list_processors
-        description: 'Deep dive: list processors. Skipped entirely (jump to summary) when overall health is already OK, so a clean server returns after just two calls.'
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/Processors
-        condition:
-          if: health_status != 'OK'
-          then: continue
-          else: goto:summary
-        extract:
-          processor_members: $.Members[*].@odata.id
-      - step_id: get_processor
-        description: Read each processor's health. Stops looping as soon as a faulty CPU is found (the cause is identified).
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/Processors/{ProcessorId}
-        loop_over: processor_members
-        loop_variable: ProcessorId
-        on_error: continue
-        break_if: processor_health != 'OK'
-        extract:
-          processor_health: $.Status.Health
-      - step_id: list_memory
-        description: List memory modules.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/Memory
-        extract:
-          memory_members: $.Members[*].@odata.id
-      - step_id: get_memory
-        description: Read each memory module's health. Stops looping once a faulty DIMM is found.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/Memory/{MemoryId}
-        loop_over: memory_members
-        loop_variable: MemoryId
-        on_error: continue
-        break_if: memory_health != 'OK'
-        extract:
-          memory_health: $.Status.Health
-      - step_id: check_thermal
-        description: Only when overall health is degraded, pull chassis thermal data to find hotspots.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/Thermal
-        condition:
-          if: health_status != 'OK'
-          then: continue
-          else: skip
-        extract:
-          temperatures: $.Temperatures[*].ReadingCelsius
-          fan_health: $.Fans[*].Status.Health
-      - step_id: summary
-        description: Terminal reporting step and jump target for the healthy fast-path. Always reachable; performs no extra I/O.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}
-        extract:
-          final_health: $.Status.Health
-    next_workflows:
-      - workflow: log_collection
-        if: health_status != 'OK'
-        reason: Pull system/manager logs to root-cause a degraded server.
-      - workflow: thermal_and_power_monitoring
-        if: health_status != 'OK'
-        reason: Inspect full sensor/fan/PSU detail when health is degraded.
-      - workflow: firmware_update
-        if: health_status == 'Warning'
-        reason: A faulty component may need a firmware remediation.
-    raw_endpoints:
-      - GET /redfish/v1/Systems
-      - GET /redfish/v1/Systems/{SystemId}
-      - GET /redfish/v1/Systems/{SystemId}/Processors
-      - GET /redfish/v1/Systems/{SystemId}/Processors/{ProcessorId}
-      - GET /redfish/v1/Systems/{SystemId}/Memory
-      - GET /redfish/v1/Systems/{SystemId}/Memory/{MemoryId}
-      - GET /redfish/v1/Chassis/{ChassisId}/Thermal
-    output_template: |-
-      ## Server Health: {SystemId}
-      | Property | Value |
-      |----------|-------|
-      | Overall Health | {health_status} |
-      | Power State | {power_state} |
-      | CPU Summary | {cpu_summary_health} |
-      | Memory Summary | {mem_summary_health} |
-  - name: hardware_inventory_report
-    category: monitoring
-    description: 'Produce a full asset/inventory report for a server: CPUs, memory, PCIe devices and their functions, network interfaces, simple storage, and chassis-level FRU/assembly and network adapter data.'
-    parameters:
-      - name: SystemId
-        type: string
-        required: true
-        description: Target system identifier.
-      - name: ChassisId
-        type: string
-        required: false
-        description: Chassis to pull FRU/assembly and network adapter data from.
-        default: first member of /redfish/v1/Chassis
-    steps:
-      - step_id: get_system
-        description: Get system to read model, serial, and manufacturer.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}
-        extract:
-          model: $.Model
-          serial: $.SerialNumber
-          manufacturer: $.Manufacturer
-      - step_id: list_pcie
-        description: List PCIe devices.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/PCIeDevices
-        extract:
-          pcie_members: $.Members[*].@odata.id
-      - step_id: get_pcie_device
-        description: Read each PCIe device.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}
-        loop_over: pcie_members
-        loop_variable: PCIeDeviceId
-        on_error: continue
-        extract:
-          pcie_name: $.Name
-          function_members: $.PCIeFunctions[*].@odata.id
-      - step_id: list_pcie_functions
-        description: List functions for the device.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}/PCIeFunctions
-        on_error: continue
-        extract:
-          function_member_ids: $.Members[*].@odata.id
-      - step_id: get_pcie_function
-        description: Read a specific PCIe function.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}/PCIeFunctions/{FunctionId}
-        on_error: continue
-        extract:
-          function_type: $.DeviceClass
-      - step_id: list_network_interfaces
-        description: List system network interfaces.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/NetworkInterfaces
-        extract:
-          netif_members: $.Members[*].@odata.id
-      - step_id: list_simple_storage
-        description: List simple storage controllers.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/SimpleStorage
-        extract:
-          simple_storage_members: $.Members[*].@odata.id
-      - step_id: get_simple_storage
-        description: Read each simple storage instance.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/SimpleStorage/{SimpleStorageId}
-        loop_over: simple_storage_members
-        loop_variable: SimpleStorageId
-        on_error: continue
-        extract:
-          devices: $.Devices[*].Name
-      - step_id: get_assembly
-        description: Read chassis assembly (FRU) data.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/Assembly
-        extract:
-          assemblies: $.Assemblies[*].Name
-      - step_id: list_network_adapters
-        description: List chassis network adapters.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/NetworkAdapters
-        extract:
-          adapter_members: $.Members[*].@odata.id
-      - step_id: get_network_adapter
-        description: Read each network adapter.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/NetworkAdapters/{NetworkAdapterId}
-        loop_over: adapter_members
-        loop_variable: NetworkAdapterId
-        on_error: continue
-        extract:
-          adapter_model: $.Model
-    raw_endpoints:
-      - GET /redfish/v1/Systems/{SystemId}
-      - GET /redfish/v1/Systems/{SystemId}/PCIeDevices
-      - GET /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}
-      - GET /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}/PCIeFunctions
-      - GET /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}/PCIeFunctions/{FunctionId}
-      - GET /redfish/v1/Systems/{SystemId}/NetworkInterfaces
-      - GET /redfish/v1/Systems/{SystemId}/SimpleStorage
-      - GET /redfish/v1/Systems/{SystemId}/SimpleStorage/{SimpleStorageId}
-      - GET /redfish/v1/Chassis/{ChassisId}/Assembly
-      - GET /redfish/v1/Chassis/{ChassisId}/NetworkAdapters
-      - GET /redfish/v1/Chassis/{ChassisId}/NetworkAdapters/{NetworkAdapterId}
-    output_template: |-
-      ## Hardware Inventory: {SystemId}
-      | Component | Value |
-      |----------|-------|
-      | Model | {model} |
-      | Serial | {serial} |
-      | Manufacturer | {manufacturer} |
-  - name: thermal_and_power_monitoring
-    category: monitoring
-    description: 'Monitor environmental health of a chassis: temperatures, fans, sensors, power supplies, batteries, and aggregate power/energy consumption. Flags any component whose status is not OK.'
-    parameters:
-      - name: ChassisId
-        type: string
-        required: false
-        description: Target chassis identifier. If omitted, every chassis in the collection is evaluated.
-        default: all members of /redfish/v1/Chassis
-      - name: Detail
-        type: string
-        required: false
-        description: Set to 'full' to always enumerate every sensor/fan/PSU/battery. When 'summary' (default), per-component loops are skipped if the chassis is healthy.
-        default: summary
-    steps:
-      - step_id: list_chassis
-        description: List all chassis to evaluate.
-        action: GET
-        endpoint: /redfish/v1/Chassis
-        extract:
-          chassis_members: $.Members[*].@odata.id
-      - step_id: get_chassis
-        description: Read each chassis instance (model, health, indicator LED).
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}
-        loop_over: chassis_members
-        loop_variable: ChassisId
-        on_error: continue
-        extract:
-          chassis_health: $.Status.Health
-          chassis_model: $.Model
-      - step_id: set_indicator_led
-        description: Optionally set the chassis identify/indicator LED (e.g., to physically locate a hot node).
-        action: PATCH
-        endpoint: /redfish/v1/Chassis/{ChassisId}
-        on_error: continue
-        condition:
-          if: set_led_requested == true
-          then: continue
-          else: skip
-        request_body:
-          LocationIndicatorActive: '{led_flag}'
-      - step_id: get_power
-        description: Read chassis power (voltages, consumption, supplies).
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/Power
-        extract:
-          power_consumed_watts: $.PowerControl[0].PowerConsumedWatts
-      - step_id: set_power_cap
-        description: Optionally apply a power cap / power limit on the chassis.
-        action: PATCH
-        endpoint: /redfish/v1/Chassis/{ChassisId}/Power
-        on_error: continue
-        condition:
-          if: set_power_cap_requested == true
-          then: continue
-          else: skip
-        request_body:
-          PowerControl:
-            - PowerLimit:
-                LimitInWatts: '{power_limit_watts}'
-      - step_id: get_env_metrics
-        description: Read aggregate environmental metrics.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/EnvironmentMetrics
-        extract:
-          power_watts: $.PowerWatts.Reading
-          temp_celsius: $.TemperatureCelsius.Reading
-      - step_id: get_thermal
-        description: Read thermal block (temps + fans).
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/Thermal
-        extract:
-          max_temp: $.Temperatures[*].ReadingCelsius
-          fan_health: $.Fans[*].Status.Health
-      - step_id: set_fan_policy
-        description: Optionally adjust thermal/fan settings (e.g., a fan offset or redundancy mode).
-        action: PATCH
-        endpoint: /redfish/v1/Chassis/{ChassisId}/Thermal
-        on_error: continue
-        condition:
-          if: set_fan_policy_requested == true
-          then: continue
-          else: skip
-        request_body:
-          Fans: '{fan_settings}'
-      - step_id: list_sensors
-        description: List all sensors. Skipped (jump to summary) on a healthy chassis unless Detail='full', avoiding a long per-sensor loop.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/Sensors
-        condition:
-          if: chassis_health != 'OK' or Detail == 'full'
-          then: continue
-          else: goto:summary
-        extract:
-          sensor_members: $.Members[*].@odata.id
-      - step_id: get_sensor
-        description: Read each sensor reading.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/Sensors/{SensorId}
-        loop_over: sensor_members
-        loop_variable: SensorId
-        on_error: continue
-        extract:
-          sensor_reading: $.Reading
-          sensor_health: $.Status.Health
-      - step_id: list_fans
-        description: List fans in the thermal subsystem.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/ThermalSubsystem/Fans
-        extract:
-          fan_members: $.Members[*].@odata.id
-      - step_id: get_fan
-        description: Read each fan.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/ThermalSubsystem/Fans/{FanId}
-        loop_over: fan_members
-        loop_variable: FanId
-        on_error: continue
-        extract:
-          fan_speed: $.SpeedPercent.Reading
-      - step_id: list_power_supplies
-        description: List power supplies.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/PowerSupplies
-        extract:
-          psu_members: $.Members[*].@odata.id
-      - step_id: get_power_supply
-        description: Read each power supply.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/PowerSupplies/{PowerSupplyId}
-        loop_over: psu_members
-        loop_variable: PowerSupplyId
-        on_error: continue
-        extract:
-          psu_health: $.Status.Health
-      - step_id: list_batteries
-        description: List batteries.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/Batteries
-        extract:
-          battery_members: $.Members[*].@odata.id
-      - step_id: get_battery
-        description: Read each battery.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/Batteries/{BatteryId}
-        loop_over: battery_members
-        loop_variable: BatteryId
-        on_error: continue
-        extract:
-          battery_soh: $.StateOfHealthPercent.Reading
-      - step_id: summary
-        description: Terminal reporting step and jump target for the healthy fast-path. No extra I/O beyond a chassis re-read.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}
-        extract:
-          final_chassis_health: $.Status.Health
-    next_workflows:
-      - workflow: log_collection
-        if: chassis_health != 'OK'
-        reason: Collect chassis/manager logs when an environmental fault is detected.
-    raw_endpoints:
-      - GET /redfish/v1/Chassis
-      - GET /redfish/v1/Chassis/{ChassisId}
-      - PATCH /redfish/v1/Chassis/{ChassisId}
-      - GET /redfish/v1/Chassis/{ChassisId}/Power
-      - PATCH /redfish/v1/Chassis/{ChassisId}/Power
-      - GET /redfish/v1/Chassis/{ChassisId}/EnvironmentMetrics
-      - GET /redfish/v1/Chassis/{ChassisId}/Thermal
-      - PATCH /redfish/v1/Chassis/{ChassisId}/Thermal
-      - GET /redfish/v1/Chassis/{ChassisId}/Sensors
-      - GET /redfish/v1/Chassis/{ChassisId}/Sensors/{SensorId}
-      - GET /redfish/v1/Chassis/{ChassisId}/ThermalSubsystem/Fans
-      - GET /redfish/v1/Chassis/{ChassisId}/ThermalSubsystem/Fans/{FanId}
-      - GET /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/PowerSupplies
-      - GET /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/PowerSupplies/{PowerSupplyId}
-      - GET /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/Batteries
-      - GET /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/Batteries/{BatteryId}
-    output_template: |-
-      ## Thermal & Power: {ChassisId}
-      | Metric | Value |
-      |----------|-------|
-      | Power Consumed (W) | {power_consumed_watts} |
-      | Temperature (C) | {temp_celsius} |
-  - name: storage_management
-    category: configuration
-    description: 'Inventory and manage storage: enumerate storage subsystems, drives and volumes, and create, modify, or delete volumes. Loops over every drive and continues even if an individual drive read fails.'
-    parameters:
-      - name: SystemId
-        type: string
-        required: true
-        description: Target system identifier.
-      - name: StorageId
-        type: string
-        required: false
-        description: Storage subsystem to act on (required for volume create/delete).
-      - name: VolumeId
-        type: string
-        required: false
-        description: Volume to modify or delete.
-      - name: ChassisId
-        type: string
-        required: false
-        description: Chassis to enumerate physical drives from.
-    steps:
-      - step_id: list_storage
-        description: List storage subsystems.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/Storage
-        extract:
-          storage_members: $.Members[*].@odata.id
-      - step_id: get_storage
-        description: Read each storage subsystem and its drive links.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}
-        loop_over: storage_members
-        loop_variable: StorageId
-        on_error: continue
-        extract:
-          drive_links: $.Drives[*].@odata.id
-      - step_id: get_drive
-        description: Read each drive; continue past failures.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Drives/{DriveId}
-        loop_over: drive_links
-        loop_variable: DriveId
-        on_error: continue
-        extract:
-          drive_health: $.Status.Health
-          drive_capacity: $.CapacityBytes
-      - step_id: list_volumes
-        description: List volumes in the subsystem.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes
-        extract:
-          volume_members: $.Members[*].@odata.id
-      - step_id: get_volume
-        description: Read a specific volume.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
-        on_error: continue
-        extract:
-          volume_raid: $.RAIDType
-          volume_capacity: $.CapacityBytes
-      - step_id: create_volume
-        description: Create a new volume (only if creation was requested).
-        action: POST
-        endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes
-        condition:
-          if: create_requested == true
-          then: continue
-          else: skip
-        request_body:
-          RAIDType: '{raid_type}'
-          CapacityBytes: '{capacity_bytes}'
-          Drives: '{drive_links}'
-        extract:
-          new_volume_uri: $.@odata.id
-      - step_id: modify_volume
-        description: Modify an existing volume.
-        action: PATCH
-        endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
-        on_error: stop
-        request_body:
-          Name: '{new_volume_name}'
-      - step_id: delete_volume
-        description: Delete a volume (only if deletion was requested).
-        action: DELETE
-        endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
-        condition:
-          if: delete_requested == true
-          then: continue
-          else: skip
-        on_error: stop
-      - step_id: list_chassis_drives
-        description: List physical drives at the chassis level.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/Drives
-        extract:
-          chassis_drive_members: $.Members[*].@odata.id
-      - step_id: get_chassis_drive
-        description: Read each chassis drive.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/Drives/{DriveId}
-        loop_over: chassis_drive_members
-        loop_variable: DriveId
-        on_error: continue
-        extract:
-          chassis_drive_health: $.Status.Health
-    raw_endpoints:
-      - GET /redfish/v1/Systems/{SystemId}/Storage
-      - GET /redfish/v1/Systems/{SystemId}/Storage/{StorageId}
-      - GET /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Drives/{DriveId}
-      - GET /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes
-      - POST /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes
-      - GET /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
-      - PATCH /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
-      - DELETE /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
-      - GET /redfish/v1/Chassis/{ChassisId}/Drives
-      - GET /redfish/v1/Chassis/{ChassisId}/Drives/{DriveId}
-    output_template: |-
-      ## Storage: {SystemId}
-      | Item | Value |
-      |----------|-------|
-      | Volume RAID | {volume_raid} |
-      | Volume Capacity | {volume_capacity} |
-      | New Volume | {new_volume_uri} |
-    next_workflows:
-      - workflow: task_management
-        if: new_volume_uri != null
-        reason: Volume creation is often asynchronous; track the resulting build task.
-  - name: server_power_operations
-    category: lifecycle
-    description: Perform power control on a server (On, GracefulShutdown, ForceOff, GracefulRestart, ForceRestart). Reads current power state first and skips the reset if the server is already in the desired state.
-    parameters:
-      - name: SystemId
-        type: string
-        required: true
-        description: Target system identifier.
-      - name: ResetType
-        type: string
-        required: true
-        description: 'Reset action: On, ForceOff, GracefulShutdown, GracefulRestart, ForceRestart, PowerCycle.'
-        default: GracefulRestart
-    steps:
-      - step_id: get_system
-        description: Read current power state.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}
-        extract:
-          power_state: $.PowerState
-      - step_id: reset_system
-        description: Issue the reset action unless already powered on and requesting On.
-        action: POST
-        endpoint: /redfish/v1/Systems/{SystemId}/Actions/ComputerSystem.Reset
-        condition:
-          if: power_state == 'On' and ResetType == 'On'
-          then: skip
-          else: continue
-        request_body:
-          ResetType: '{ResetType}'
-        on_error: stop
-      - step_id: patch_system
-        description: Optionally update boot override settings alongside the power action.
-        action: PATCH
-        endpoint: /redfish/v1/Systems/{SystemId}
-        on_error: continue
-        request_body:
-          Boot:
-            BootSourceOverrideTarget: '{boot_target}'
-    raw_endpoints:
-      - GET /redfish/v1/Systems/{SystemId}
-      - PATCH /redfish/v1/Systems/{SystemId}
-      - POST /redfish/v1/Systems/{SystemId}/Actions/ComputerSystem.Reset
-    output_template: |-
-      ## Power Operation: {SystemId}
-      | Property | Value |
-      |----------|-------|
-      | Previous State | {power_state} |
-      | Action Issued | {ResetType} |
-  - name: bios_configuration
-    category: configuration
-    description: 'View and manage BIOS: read current attributes and boot options, modify attributes, change the BIOS password, or reset BIOS to factory defaults.'
-    parameters:
-      - name: SystemId
-        type: string
-        required: true
-        description: Target system identifier.
-      - name: BootOptionId
-        type: string
-        required: false
-        description: Specific boot option to inspect.
-    steps:
-      - step_id: get_bios
-        description: Read current BIOS attributes.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/Bios
-        extract:
-          attributes: $.Attributes
-          boot_mode: $.Attributes.BootMode
-      - step_id: list_boot_options
-        description: List boot options.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/BootOptions
-        extract:
-          boot_option_members: $.Members[*].@odata.id
-      - step_id: get_boot_option
-        description: Read each boot option.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/BootOptions/{BootOptionId}
-        loop_over: boot_option_members
-        loop_variable: BootOptionId
-        on_error: continue
-        extract:
-          boot_display_name: $.DisplayName
-          boot_enabled: $.BootOptionEnabled
-      - step_id: modify_bios
-        description: Apply BIOS attribute changes (staged until next reboot).
-        action: PATCH
-        endpoint: /redfish/v1/Systems/{SystemId}/Bios
-        on_error: stop
-        condition:
-          if: modify_requested == true
-          then: continue
-          else: skip
-        request_body:
-          Attributes: '{bios_attributes}'
-      - step_id: change_bios_password
-        description: Change the BIOS password if requested.
-        action: POST
-        endpoint: /redfish/v1/Systems/{SystemId}/Bios/Actions/Bios.ChangePassword
-        condition:
-          if: password_change_requested == true
-          then: continue
-          else: skip
-        request_body:
-          PasswordName: '{password_name}'
-          OldPassword: '{old_password}'
-          NewPassword: '{new_password}'
-      - step_id: reset_bios
-        description: Reset BIOS to defaults if requested.
-        action: POST
-        endpoint: /redfish/v1/Systems/{SystemId}/Bios/Actions/Bios.ResetBios
-        condition:
-          if: reset_requested == true
-          then: continue
-          else: skip
-    raw_endpoints:
-      - GET /redfish/v1/Systems/{SystemId}/Bios
-      - PATCH /redfish/v1/Systems/{SystemId}/Bios
-      - POST /redfish/v1/Systems/{SystemId}/Bios/Actions/Bios.ResetBios
-      - POST /redfish/v1/Systems/{SystemId}/Bios/Actions/Bios.ChangePassword
-      - GET /redfish/v1/Systems/{SystemId}/BootOptions
-      - GET /redfish/v1/Systems/{SystemId}/BootOptions/{BootOptionId}
-    output_template: |-
-      ## BIOS Configuration: {SystemId}
-      | Property | Value |
-      |----------|-------|
-      | Boot Mode | {boot_mode} |
-  - name: secure_boot_management
-    category: security
-    description: 'Inspect and manage UEFI Secure Boot: read enablement and key state, enable/disable Secure Boot, and reset Secure Boot keys to factory or default sets.'
-    parameters:
-      - name: SystemId
-        type: string
-        required: true
-        description: Target system identifier.
-    steps:
-      - step_id: get_secure_boot
-        description: Read Secure Boot state.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/SecureBoot
-        extract:
-          sb_enabled: $.SecureBootEnable
-          sb_current: $.SecureBootCurrentBoot
-          sb_mode: $.SecureBootMode
-      - step_id: modify_secure_boot
-        description: Enable or disable Secure Boot.
-        action: PATCH
-        endpoint: /redfish/v1/Systems/{SystemId}/SecureBoot
-        on_error: stop
-        condition:
-          if: modify_requested == true
-          then: continue
-          else: skip
-        request_body:
-          SecureBootEnable: '{enable_flag}'
-      - step_id: reset_keys
-        description: Reset Secure Boot keys if requested.
-        action: POST
-        endpoint: /redfish/v1/Systems/{SystemId}/SecureBoot/Actions/SecureBoot.ResetKeys
-        condition:
-          if: reset_keys_requested == true
-          then: continue
-          else: skip
-        request_body:
-          ResetKeysType: '{reset_keys_type}'
-    raw_endpoints:
-      - GET /redfish/v1/Systems/{SystemId}/SecureBoot
-      - PATCH /redfish/v1/Systems/{SystemId}/SecureBoot
-      - POST /redfish/v1/Systems/{SystemId}/SecureBoot/Actions/SecureBoot.ResetKeys
-    output_template: |-
-      ## Secure Boot: {SystemId}
-      | Property | Value |
-      |----------|-------|
-      | Enabled | {sb_enabled} |
-      | Mode | {sb_mode} |
-  - name: firmware_update
-    category: maintenance
-    description: Check installed firmware/software versions, trigger a firmware update from a URI, and poll the resulting task to completion. If the target component is already at the desired version, the update is skipped.
-    parameters:
-      - name: ImageURI
-        type: string
-        required: false
-        description: URI of the firmware image to apply.
-      - name: TargetVersion
-        type: string
-        required: false
-        description: Desired version used to decide whether an update is needed.
-      - name: SoftwareId
-        type: string
-        required: false
-        description: Specific inventory entry to inspect.
-      - name: TaskId
-        type: string
-        required: false
-        description: Task to poll (populated from the update response).
-    steps:
-      - step_id: get_update_service
-        description: Read update service capabilities.
-        action: GET
-        endpoint: /redfish/v1/UpdateService
-        extract:
-          service_state: $.Status.State
-          push_uri: $.HttpPushUri
-      - step_id: list_firmware
-        description: List installed firmware.
-        action: GET
-        endpoint: /redfish/v1/UpdateService/FirmwareInventory
-        extract:
-          firmware_members: $.Members[*].@odata.id
-      - step_id: get_firmware_item
-        description: Read each firmware entry's version.
-        action: GET
-        endpoint: /redfish/v1/UpdateService/FirmwareInventory/{SoftwareId}
-        loop_over: firmware_members
-        loop_variable: SoftwareId
-        on_error: continue
-        extract:
-          current_version: $.Version
-          fw_name: $.Name
-      - step_id: list_software
-        description: List installed software.
-        action: GET
-        endpoint: /redfish/v1/UpdateService/SoftwareInventory
-        extract:
-          software_members: $.Members[*].@odata.id
-      - step_id: get_software_item
-        description: Read each software entry.
-        action: GET
-        endpoint: /redfish/v1/UpdateService/SoftwareInventory/{SoftwareId}
-        loop_over: software_members
-        loop_variable: SoftwareId
-        on_error: continue
-        extract:
-          sw_version: $.Version
-      - step_id: configure_update_service
-        description: Optionally adjust update service settings before updating.
-        action: PATCH
-        endpoint: /redfish/v1/UpdateService
-        on_error: continue
-        condition:
-          if: configure_requested == true
-          then: continue
-          else: skip
-        request_body:
-          HttpPushUriTargetsBusy: false
-      - step_id: trigger_update
-        description: Trigger the update only if the current version differs from the target; otherwise skip to reporting.
-        action: POST
-        endpoint: /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate
-        condition:
-          if: current_version != TargetVersion
-          then: continue
-          else: goto:report
-        request_body:
-          ImageURI: '{ImageURI}'
-        on_error: stop
-        extract:
-          TaskId: $.Id
-          task_uri: $.@odata.id
-      - step_id: poll_task
-        description: Poll the update task until it completes.
-        action: GET
-        endpoint: /redfish/v1/TaskService/Tasks/{TaskId}
-        on_error: continue
-        extract:
-          task_state: $.TaskState
-          task_percent: $.PercentComplete
-      - step_id: report
-        description: Final reporting step (jump target when no update is needed).
-        action: GET
-        endpoint: /redfish/v1/UpdateService/FirmwareInventory
-        extract:
-          final_members: $.Members@odata.count
-    raw_endpoints:
-      - GET /redfish/v1/UpdateService
-      - PATCH /redfish/v1/UpdateService
-      - POST /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate
-      - GET /redfish/v1/UpdateService/FirmwareInventory
-      - GET /redfish/v1/UpdateService/FirmwareInventory/{SoftwareId}
-      - GET /redfish/v1/UpdateService/SoftwareInventory
-      - GET /redfish/v1/UpdateService/SoftwareInventory/{SoftwareId}
-      - GET /redfish/v1/TaskService/Tasks/{TaskId}
-    output_template: |-
-      ## Firmware Update
-      | Property | Value |
-      |----------|-------|
-      | Current Version | {current_version} |
-      | Target Version | {TargetVersion} |
-      | Task State | {task_state} |
-      | Percent Complete | {task_percent} |
-    next_workflows:
-      - workflow: task_management
-        if: TaskId != null
-        reason: Hand off to task management to monitor or cancel the update task.
-  - name: network_configuration
-    category: configuration
-    description: 'View and modify network settings on both the host system and the BMC: system and manager Ethernet interfaces, plus BMC network protocol services (HTTPS, SSH, IPMI).'
-    parameters:
-      - name: SystemId
-        type: string
-        required: false
-        description: Target system for host NIC config.
-      - name: ManagerId
-        type: string
-        required: false
-        description: Target manager for BMC NIC config.
-      - name: InterfaceId
-        type: string
-        required: false
-        description: Specific Ethernet interface to modify.
-    steps:
-      - step_id: list_system_nics
-        description: List system Ethernet interfaces.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/EthernetInterfaces
-        extract:
-          sys_nic_members: $.Members[*].@odata.id
-      - step_id: get_system_nic
-        description: Read each system Ethernet interface.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/EthernetInterfaces/{InterfaceId}
-        loop_over: sys_nic_members
-        loop_variable: InterfaceId
-        on_error: continue
-        extract:
-          mac: $.MACAddress
-          ipv4: $.IPv4Addresses[*].Address
-      - step_id: modify_system_nic
-        description: Modify a system Ethernet interface if requested.
-        action: PATCH
-        endpoint: /redfish/v1/Systems/{SystemId}/EthernetInterfaces/{InterfaceId}
-        on_error: stop
-        condition:
-          if: modify_system_nic == true
-          then: continue
-          else: skip
-        request_body:
-          DHCPv4:
-            DHCPEnabled: '{dhcp_enabled}'
-      - step_id: list_manager_nics
-        description: List manager (BMC) Ethernet interfaces.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/EthernetInterfaces
-        extract:
-          mgr_nic_members: $.Members[*].@odata.id
-      - step_id: get_manager_nic
-        description: Read each manager Ethernet interface.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/EthernetInterfaces/{InterfaceId}
-        loop_over: mgr_nic_members
-        loop_variable: InterfaceId
-        on_error: continue
-        extract:
-          mgr_mac: $.MACAddress
-          mgr_ipv4: $.IPv4Addresses[*].Address
-      - step_id: modify_manager_nic
-        description: Modify a manager Ethernet interface if requested.
-        action: PATCH
-        endpoint: /redfish/v1/Managers/{ManagerId}/EthernetInterfaces/{InterfaceId}
-        on_error: stop
-        condition:
-          if: modify_manager_nic == true
-          then: continue
-          else: skip
-        request_body:
-          IPv4StaticAddresses: '{static_addresses}'
-      - step_id: get_network_protocol
-        description: Read BMC network protocol/service settings.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/NetworkProtocol
-        extract:
-          ssh_enabled: $.SSH.ProtocolEnabled
-          https_port: $.HTTPS.Port
-      - step_id: modify_network_protocol
-        description: Enable/disable protocols or change ports.
-        action: PATCH
-        endpoint: /redfish/v1/Managers/{ManagerId}/NetworkProtocol
-        on_error: stop
-        condition:
-          if: modify_protocol == true
-          then: continue
-          else: skip
-        request_body:
-          SSH:
-            ProtocolEnabled: '{ssh_flag}'
-    raw_endpoints:
-      - GET /redfish/v1/Systems/{SystemId}/EthernetInterfaces
-      - GET /redfish/v1/Systems/{SystemId}/EthernetInterfaces/{InterfaceId}
-      - PATCH /redfish/v1/Systems/{SystemId}/EthernetInterfaces/{InterfaceId}
-      - GET /redfish/v1/Managers/{ManagerId}/EthernetInterfaces
-      - GET /redfish/v1/Managers/{ManagerId}/EthernetInterfaces/{InterfaceId}
-      - PATCH /redfish/v1/Managers/{ManagerId}/EthernetInterfaces/{InterfaceId}
-      - GET /redfish/v1/Managers/{ManagerId}/NetworkProtocol
-      - PATCH /redfish/v1/Managers/{ManagerId}/NetworkProtocol
-    output_template: |-
-      ## Network Configuration
-      | Property | Value |
-      |----------|-------|
-      | System NIC MAC | {mac} |
-      | Manager NIC MAC | {mgr_mac} |
-      | SSH Enabled | {ssh_enabled} |
-  - name: bmc_manager_operations
-    category: maintenance
-    description: 'Manage the BMC/iDRAC management controller itself: read manager details, update settings, reboot the BMC, or reset it to factory defaults.'
-    parameters:
-      - name: ManagerId
-        type: string
-        required: false
-        description: Target manager identifier.
-        default: first member of /redfish/v1/Managers
-      - name: ResetType
-        type: string
-        required: false
-        description: Manager reset type (GracefulRestart, ForceRestart).
-        default: GracefulRestart
-    steps:
-      - step_id: list_managers
-        description: List management controllers.
-        action: GET
-        endpoint: /redfish/v1/Managers
-        extract:
-          manager_members: $.Members[*].@odata.id
-      - step_id: get_manager
-        description: Read the target manager.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}
-        extract:
-          firmware_version: $.FirmwareVersion
-          manager_type: $.ManagerType
-          mgr_health: $.Status.Health
-      - step_id: patch_manager
-        description: Update manager settings (e.g., datetime) if requested.
-        action: PATCH
-        endpoint: /redfish/v1/Managers/{ManagerId}
-        on_error: continue
-        condition:
-          if: modify_requested == true
-          then: continue
-          else: skip
-        request_body:
-          DateTime: '{datetime}'
-      - step_id: reset_manager
-        description: Reboot the BMC if requested.
-        action: POST
-        endpoint: /redfish/v1/Managers/{ManagerId}/Actions/Manager.Reset
-        condition:
-          if: reset_requested == true
-          then: continue
-          else: skip
-        request_body:
-          ResetType: '{ResetType}'
-        on_error: stop
-      - step_id: reset_to_defaults
-        description: Reset the BMC to factory defaults if explicitly requested.
-        action: POST
-        endpoint: /redfish/v1/Managers/{ManagerId}/Actions/Manager.ResetToDefaults
-        condition:
-          if: factory_reset_requested == true
-          then: continue
-          else: skip
-        request_body:
-          ResetType: '{factory_reset_type}'
-        on_error: stop
-    raw_endpoints:
-      - GET /redfish/v1/Managers
-      - GET /redfish/v1/Managers/{ManagerId}
-      - PATCH /redfish/v1/Managers/{ManagerId}
-      - POST /redfish/v1/Managers/{ManagerId}/Actions/Manager.Reset
-      - POST /redfish/v1/Managers/{ManagerId}/Actions/Manager.ResetToDefaults
-    output_template: |-
-      ## BMC Manager: {ManagerId}
-      | Property | Value |
-      |----------|-------|
-      | Firmware Version | {firmware_version} |
-      | Type | {manager_type} |
-      | Health | {mgr_health} |
-  - name: user_account_management
-    category: security
-    description: 'Manage local user accounts and roles: read account service policy, list/create/modify/delete accounts, and inspect role definitions and privileges.'
-    parameters:
-      - name: AccountId
-        type: string
-        required: false
-        description: Account to read, modify, or delete.
-      - name: RoleId
-        type: string
-        required: false
-        description: Role to inspect.
-    steps:
-      - step_id: get_account_service
-        description: Read account service policy (lockout, password rules).
-        action: GET
-        endpoint: /redfish/v1/AccountService
-        extract:
-          min_pw_length: $.MinPasswordLength
-          lockout_threshold: $.AccountLockoutThreshold
-      - step_id: configure_account_service
-        description: Update account policy if requested.
-        action: PATCH
-        endpoint: /redfish/v1/AccountService
-        on_error: continue
-        condition:
-          if: configure_policy == true
-          then: continue
-          else: skip
-        request_body:
-          AccountLockoutThreshold: '{lockout_threshold}'
-      - step_id: list_accounts
-        description: List user accounts.
-        action: GET
-        endpoint: /redfish/v1/AccountService/Accounts
-        extract:
-          account_members: $.Members[*].@odata.id
-      - step_id: get_account
-        description: Read each account.
-        action: GET
-        endpoint: /redfish/v1/AccountService/Accounts/{AccountId}
-        loop_over: account_members
-        loop_variable: AccountId
-        on_error: continue
-        extract:
-          username: $.UserName
-          role: $.RoleId
-          enabled: $.Enabled
-      - step_id: create_account
-        description: Create a new account if requested.
-        action: POST
-        endpoint: /redfish/v1/AccountService/Accounts
-        condition:
-          if: create_requested == true
-          then: continue
-          else: skip
-        request_body:
-          UserName: '{new_username}'
-          Password: '{new_password}'
-          RoleId: '{new_role}'
-          Enabled: true
-        extract:
-          new_account_uri: $.@odata.id
-      - step_id: modify_account
-        description: Modify an account (role, enable/disable, password) if requested.
-        action: PATCH
-        endpoint: /redfish/v1/AccountService/Accounts/{AccountId}
-        on_error: stop
-        condition:
-          if: modify_requested == true
-          then: continue
-          else: skip
-        request_body:
-          RoleId: '{updated_role}'
-          Enabled: '{enabled_flag}'
-      - step_id: delete_account
-        description: Delete an account if requested.
-        action: DELETE
-        endpoint: /redfish/v1/AccountService/Accounts/{AccountId}
-        on_error: stop
-        condition:
-          if: delete_requested == true
-          then: continue
-          else: skip
-      - step_id: list_roles
-        description: List available roles.
-        action: GET
-        endpoint: /redfish/v1/AccountService/Roles
-        extract:
-          role_members: $.Members[*].@odata.id
-      - step_id: get_role
-        description: Read each role's privileges.
-        action: GET
-        endpoint: /redfish/v1/AccountService/Roles/{RoleId}
-        loop_over: role_members
-        loop_variable: RoleId
-        on_error: continue
-        extract:
-          assigned_privileges: $.AssignedPrivileges
-    raw_endpoints:
-      - GET /redfish/v1/AccountService
-      - PATCH /redfish/v1/AccountService
-      - GET /redfish/v1/AccountService/Accounts
-      - POST /redfish/v1/AccountService/Accounts
-      - GET /redfish/v1/AccountService/Accounts/{AccountId}
-      - PATCH /redfish/v1/AccountService/Accounts/{AccountId}
-      - DELETE /redfish/v1/AccountService/Accounts/{AccountId}
-      - GET /redfish/v1/AccountService/Roles
-      - GET /redfish/v1/AccountService/Roles/{RoleId}
-    output_template: |-
-      ## User Accounts
-      | Account | Role | Enabled |
-      |---------|------|---------|
-      | {username} | {role} | {enabled} |
-  - name: session_management
-    category: security
-    description: 'Manage authenticated Redfish sessions: read session service config, list active sessions, open a new session (login), and delete sessions (logout).'
-    parameters:
-      - name: SessionId
-        type: string
-        required: false
-        description: Session to inspect or delete.
-    steps:
-      - step_id: get_session_service
-        description: Read session service config (timeout).
-        action: GET
-        endpoint: /redfish/v1/SessionService
-        extract:
-          session_timeout: $.SessionTimeout
-      - step_id: configure_session_service
-        description: Update session timeout if requested.
-        action: PATCH
-        endpoint: /redfish/v1/SessionService
-        on_error: continue
-        condition:
-          if: configure_requested == true
-          then: continue
-          else: skip
-        request_body:
-          SessionTimeout: '{session_timeout}'
-      - step_id: list_sessions
-        description: List active sessions.
-        action: GET
-        endpoint: /redfish/v1/SessionService/Sessions
-        extract:
-          session_members: $.Members[*].@odata.id
-      - step_id: create_session
-        description: Create a new session (login) if requested.
-        action: POST
-        endpoint: /redfish/v1/SessionService/Sessions
-        condition:
-          if: login_requested == true
-          then: continue
-          else: skip
-        request_body:
-          UserName: '{username}'
-          Password: '{password}'
-        extract:
-          new_session_uri: $.@odata.id
-          auth_token: $.headers.X-Auth-Token
-      - step_id: get_session
-        description: Read each session.
-        action: GET
-        endpoint: /redfish/v1/SessionService/Sessions/{SessionId}
-        loop_over: session_members
-        loop_variable: SessionId
-        on_error: continue
-        extract:
-          session_user: $.UserName
-      - step_id: delete_session
-        description: Delete a session (logout) if requested.
-        action: DELETE
-        endpoint: /redfish/v1/SessionService/Sessions/{SessionId}
-        on_error: stop
-        condition:
-          if: logout_requested == true
-          then: continue
-          else: skip
-    raw_endpoints:
-      - GET /redfish/v1/SessionService
-      - PATCH /redfish/v1/SessionService
-      - GET /redfish/v1/SessionService/Sessions
-      - POST /redfish/v1/SessionService/Sessions
-      - GET /redfish/v1/SessionService/Sessions/{SessionId}
-      - DELETE /redfish/v1/SessionService/Sessions/{SessionId}
-    output_template: |-
-      ## Sessions
-      | Property | Value |
-      |----------|-------|
-      | Timeout | {session_timeout} |
-      | Active Sessions | {session_members} |
-  - name: event_subscription_management
-    category: configuration
-    description: 'Manage event/alert delivery: read event service config, list/create/modify/delete subscriptions (webhook destinations), and submit a test event to validate delivery.'
-    parameters:
-      - name: SubscriptionId
-        type: string
-        required: false
-        description: Subscription to inspect, modify, or delete.
-    steps:
-      - step_id: get_event_service
-        description: Read event service config.
-        action: GET
-        endpoint: /redfish/v1/EventService
-        extract:
-          service_enabled: $.ServiceEnabled
-          delivery_retry: $.DeliveryRetryAttempts
-      - step_id: configure_event_service
-        description: Update event service config if requested.
-        action: PATCH
-        endpoint: /redfish/v1/EventService
-        on_error: continue
-        condition:
-          if: configure_requested == true
-          then: continue
-          else: skip
-        request_body:
-          DeliveryRetryAttempts: '{retry_attempts}'
-      - step_id: list_subscriptions
-        description: List event subscriptions.
-        action: GET
-        endpoint: /redfish/v1/EventService/Subscriptions
-        extract:
-          subscription_members: $.Members[*].@odata.id
-      - step_id: get_subscription
-        description: Read each subscription.
-        action: GET
-        endpoint: /redfish/v1/EventService/Subscriptions/{SubscriptionId}
-        loop_over: subscription_members
-        loop_variable: SubscriptionId
-        on_error: continue
-        extract:
-          destination: $.Destination
-          event_types: $.EventTypes
-      - step_id: create_subscription
-        description: Create a subscription if requested.
-        action: POST
-        endpoint: /redfish/v1/EventService/Subscriptions
-        condition:
-          if: create_requested == true
-          then: continue
-          else: skip
-        request_body:
-          Destination: '{destination_uri}'
-          Protocol: Redfish
-          EventTypes: '{event_types}'
-        extract:
-          new_subscription_uri: $.@odata.id
-      - step_id: modify_subscription
-        description: Modify a subscription if requested.
-        action: PATCH
-        endpoint: /redfish/v1/EventService/Subscriptions/{SubscriptionId}
-        on_error: stop
-        condition:
-          if: modify_requested == true
-          then: continue
-          else: skip
-        request_body:
-          Context: '{context}'
-      - step_id: delete_subscription
-        description: Delete a subscription if requested.
-        action: DELETE
-        endpoint: /redfish/v1/EventService/Subscriptions/{SubscriptionId}
-        on_error: stop
-        condition:
-          if: delete_requested == true
-          then: continue
-          else: skip
-      - step_id: submit_test_event
-        description: Submit a test event to validate delivery if requested.
-        action: POST
-        endpoint: /redfish/v1/EventService/Actions/EventService.SubmitTestEvent
-        condition:
-          if: test_requested == true
-          then: continue
-          else: skip
-        request_body:
-          MessageId: '{message_id}'
-    raw_endpoints:
-      - GET /redfish/v1/EventService
-      - PATCH /redfish/v1/EventService
-      - POST /redfish/v1/EventService/Actions/EventService.SubmitTestEvent
-      - GET /redfish/v1/EventService/Subscriptions
-      - POST /redfish/v1/EventService/Subscriptions
-      - GET /redfish/v1/EventService/Subscriptions/{SubscriptionId}
-      - PATCH /redfish/v1/EventService/Subscriptions/{SubscriptionId}
-      - DELETE /redfish/v1/EventService/Subscriptions/{SubscriptionId}
-    output_template: |-
-      ## Event Subscriptions
-      | Property | Value |
-      |----------|-------|
-      | Service Enabled | {service_enabled} |
-      | Destination | {destination} |
-  - name: log_collection
-    category: diagnostics
-    description: Collect and analyze logs across the system, manager, and chassis log services. Iterates every log service, pulls entries, and optionally clears a system log. Continues past any log service that fails to read.
-    parameters:
-      - name: SystemId
-        type: string
-        required: false
-        description: System whose logs to collect.
-      - name: ManagerId
-        type: string
-        required: false
-        description: Manager whose logs to collect.
-      - name: ChassisId
-        type: string
-        required: false
-        description: Chassis whose log services to enumerate.
-      - name: LogServiceId
-        type: string
-        required: false
-        description: Specific log service id.
-      - name: EntryId
-        type: string
-        required: false
-        description: Specific log entry id.
-    steps:
-      - step_id: list_system_logs
-        description: List system log services.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/LogServices
-        extract:
-          sys_logsvc_members: $.Members[*].@odata.id
-      - step_id: get_system_log_service
-        description: Read each system log service.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}
-        loop_over: sys_logsvc_members
-        loop_variable: LogServiceId
-        on_error: continue
-        extract:
-          log_service_name: $.Name
-          overwrite_policy: $.OverWritePolicy
-      - step_id: list_system_log_entries
-        description: List entries for a system log service.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Entries
-        on_error: continue
-        extract:
-          entry_members: $.Members[*].@odata.id
-          entry_count: $.Members@odata.count
-      - step_id: get_system_log_entry
-        description: Read a specific system log entry.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Entries/{EntryId}
-        on_error: continue
-        extract:
-          entry_message: $.Message
-          entry_severity: $.Severity
-      - step_id: clear_system_log
-        description: Clear the system log only if explicitly requested.
-        action: POST
-        endpoint: /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Actions/LogService.ClearLog
-        condition:
-          if: clear_requested == true
-          then: continue
-          else: skip
-        on_error: stop
-      - step_id: list_manager_logs
-        description: List manager log services.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/LogServices
-        on_error: continue
-        extract:
-          mgr_logsvc_members: $.Members[*].@odata.id
-      - step_id: get_manager_log_service
-        description: Read each manager log service.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}
-        loop_over: mgr_logsvc_members
-        loop_variable: LogServiceId
-        on_error: continue
-        extract:
-          mgr_log_name: $.Name
-      - step_id: list_manager_log_entries
-        description: List manager log entries.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}/Entries
-        on_error: continue
-        extract:
-          mgr_entry_members: $.Members[*].@odata.id
-      - step_id: get_manager_log_entry
-        description: Read a specific manager log entry.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}/Entries/{EntryId}
-        on_error: continue
-        extract:
-          mgr_entry_message: $.Message
-      - step_id: list_chassis_logs
-        description: List chassis log services.
-        action: GET
-        endpoint: /redfish/v1/Chassis/{ChassisId}/LogServices
-        on_error: continue
-        extract:
-          chassis_logsvc_members: $.Members[*].@odata.id
-    raw_endpoints:
-      - GET /redfish/v1/Systems/{SystemId}/LogServices
-      - GET /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}
-      - GET /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Entries
-      - GET /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Entries/{EntryId}
-      - POST /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Actions/LogService.ClearLog
-      - GET /redfish/v1/Managers/{ManagerId}/LogServices
-      - GET /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}
-      - GET /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}/Entries
-      - GET /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}/Entries/{EntryId}
-      - GET /redfish/v1/Chassis/{ChassisId}/LogServices
-    output_template: |-
-      ## Log Collection
-      | Source | Entries |
-      |--------|---------|
-      | System Log | {entry_count} |
-      | Last Severity | {entry_severity} |
-  - name: certificate_management
-    category: security
-    description: 'Manage TLS certificates: read the certificate service, view and delete manager certificates, generate a CSR, and replace an existing certificate.'
-    parameters:
-      - name: ManagerId
-        type: string
-        required: false
-        description: Manager whose certificates to manage.
-      - name: CertificateId
-        type: string
-        required: false
-        description: Certificate to view or delete.
-    steps:
-      - step_id: get_cert_service
-        description: Read certificate service.
-        action: GET
-        endpoint: /redfish/v1/CertificateService
-        extract:
-          csr_action: $.Actions.['#CertificateService.GenerateCSR'].target
-      - step_id: list_manager_certs
-        description: List certificates on the manager.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/Certificates
-        extract:
-          cert_members: $.Members[*].@odata.id
-      - step_id: get_manager_cert
-        description: Read each certificate.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/Certificates/{CertificateId}
-        loop_over: cert_members
-        loop_variable: CertificateId
-        on_error: continue
-        extract:
-          subject: $.Subject.CommonName
-          valid_not_after: $.ValidNotAfter
-      - step_id: generate_csr
-        description: Generate a CSR if requested.
-        action: POST
-        endpoint: /redfish/v1/CertificateService/Actions/CertificateService.GenerateCSR
-        condition:
-          if: csr_requested == true
-          then: continue
-          else: skip
-        request_body:
-          CommonName: '{common_name}'
-          Organization: '{org}'
-          CertificateCollection: '{cert_collection_uri}'
-        extract:
-          csr_string: $.CSRString
-      - step_id: replace_certificate
-        description: Replace an existing certificate if requested.
-        action: POST
-        endpoint: /redfish/v1/CertificateService/Actions/CertificateService.ReplaceCertificate
-        condition:
-          if: replace_requested == true
-          then: continue
-          else: skip
-        request_body:
-          CertificateUri: '{certificate_uri}'
-          CertificateString: '{certificate_string}'
-          CertificateType: PEM
-      - step_id: delete_certificate
-        description: Delete a certificate if requested.
-        action: DELETE
-        endpoint: /redfish/v1/Managers/{ManagerId}/Certificates/{CertificateId}
-        on_error: stop
-        condition:
-          if: delete_requested == true
-          then: continue
-          else: skip
-    raw_endpoints:
-      - GET /redfish/v1/CertificateService
-      - POST /redfish/v1/CertificateService/Actions/CertificateService.GenerateCSR
-      - POST /redfish/v1/CertificateService/Actions/CertificateService.ReplaceCertificate
-      - GET /redfish/v1/Managers/{ManagerId}/Certificates
-      - GET /redfish/v1/Managers/{ManagerId}/Certificates/{CertificateId}
-      - DELETE /redfish/v1/Managers/{ManagerId}/Certificates/{CertificateId}
-    output_template: |-
-      ## Certificates
-      | Property | Value |
-      |----------|-------|
-      | Subject | {subject} |
-      | Valid Until | {valid_not_after} |
-  - name: virtual_media_operations
-    category: lifecycle
-    description: Mount and unmount virtual media (ISO images) on either the system or the manager, e.g. to boot an OS installer over the network. Inspects current media state before inserting.
-    parameters:
-      - name: SystemId
-        type: string
-        required: false
-        description: System target for virtual media.
-      - name: ManagerId
-        type: string
-        required: false
-        description: Manager target for virtual media.
-      - name: VirtualMediaId
-        type: string
-        required: false
-        description: Specific virtual media device id.
-      - name: ImageURI
-        type: string
-        required: false
-        description: URI of the ISO/IMG image to mount.
-    steps:
-      - step_id: list_system_vm
-        description: List system virtual media devices.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/VirtualMedia
-        extract:
-          sys_vm_members: $.Members[*].@odata.id
-      - step_id: get_system_vm
-        description: Read a system virtual media device's state.
-        action: GET
-        endpoint: /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}
-        on_error: continue
-        extract:
-          inserted: $.Inserted
-          image: $.Image
-      - step_id: configure_system_vm
-        description: Patch virtual media settings (e.g., WriteProtected) if requested.
-        action: PATCH
-        endpoint: /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}
-        on_error: continue
-        condition:
-          if: configure_requested == true
-          then: continue
-          else: skip
-        request_body:
-          WriteProtected: true
-      - step_id: insert_system_media
-        description: Insert media on the system only if nothing is currently inserted.
-        action: POST
-        endpoint: /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.InsertMedia
-        condition:
-          if: inserted == false
-          then: continue
-          else: goto:eject_system_media
-        request_body:
-          Image: '{ImageURI}'
-          Inserted: true
-          WriteProtected: true
-        on_error: stop
-      - step_id: eject_system_media
-        description: Eject media from the system if requested.
-        action: POST
-        endpoint: /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.EjectMedia
-        condition:
-          if: eject_requested == true
-          then: continue
-          else: skip
-        on_error: continue
-      - step_id: list_manager_vm
-        description: List manager virtual media devices.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/VirtualMedia
-        on_error: continue
-        extract:
-          mgr_vm_members: $.Members[*].@odata.id
-      - step_id: get_manager_vm
-        description: Read a manager virtual media device's state.
-        action: GET
-        endpoint: /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}
-        on_error: continue
-        extract:
-          mgr_inserted: $.Inserted
-      - step_id: configure_manager_vm
-        description: Patch manager virtual media settings if requested.
-        action: PATCH
-        endpoint: /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}
-        on_error: continue
-        condition:
-          if: configure_requested == true
-          then: continue
-          else: skip
-        request_body:
-          WriteProtected: true
-      - step_id: insert_manager_media
-        description: Insert media on the manager if requested.
-        action: POST
-        endpoint: /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.InsertMedia
-        condition:
-          if: insert_manager_requested == true
-          then: continue
-          else: skip
-        request_body:
-          Image: '{ImageURI}'
-          Inserted: true
-        on_error: stop
-      - step_id: eject_manager_media
-        description: Eject media on the manager if requested.
-        action: POST
-        endpoint: /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.EjectMedia
-        condition:
-          if: eject_manager_requested == true
-          then: continue
-          else: skip
-        on_error: continue
-    raw_endpoints:
-      - GET /redfish/v1/Systems/{SystemId}/VirtualMedia
-      - GET /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}
-      - PATCH /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}
-      - POST /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.InsertMedia
-      - POST /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.EjectMedia
-      - GET /redfish/v1/Managers/{ManagerId}/VirtualMedia
-      - GET /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}
-      - PATCH /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}
-      - POST /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.InsertMedia
-      - POST /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.EjectMedia
-    output_template: |-
-      ## Virtual Media
-      | Property | Value |
-      |----------|-------|
-      | Inserted | {inserted} |
-      | Image | {image} |
-  - name: telemetry_metrics_collection
-    category: monitoring
-    description: 'Collect time-series telemetry: read the telemetry service, enumerate metric definitions, and pull metric reports for trending and capacity analysis.'
-    parameters:
-      - name: MetricDefinitionId
-        type: string
-        required: false
-        description: Specific metric definition to inspect.
-      - name: MetricReportId
-        type: string
-        required: false
-        description: Specific metric report to retrieve.
-    steps:
-      - step_id: get_telemetry_service
-        description: Read telemetry service config.
-        action: GET
-        endpoint: /redfish/v1/TelemetryService
-        extract:
-          min_collection_interval: $.MinCollectionInterval
-      - step_id: configure_telemetry
-        description: Update telemetry service config if requested.
-        action: PATCH
-        endpoint: /redfish/v1/TelemetryService
-        on_error: continue
-        condition:
-          if: configure_requested == true
-          then: continue
-          else: skip
-        request_body:
-          ServiceEnabled: true
-      - step_id: list_metric_definitions
-        description: List metric definitions.
-        action: GET
-        endpoint: /redfish/v1/TelemetryService/MetricDefinitions
-        extract:
-          metric_def_members: $.Members[*].@odata.id
-      - step_id: get_metric_definition
-        description: Read each metric definition.
-        action: GET
-        endpoint: /redfish/v1/TelemetryService/MetricDefinitions/{MetricDefinitionId}
-        loop_over: metric_def_members
-        loop_variable: MetricDefinitionId
-        on_error: continue
-        extract:
-          metric_type: $.MetricType
-          units: $.Units
-      - step_id: list_metric_reports
-        description: List metric reports.
-        action: GET
-        endpoint: /redfish/v1/TelemetryService/MetricReports
-        extract:
-          metric_report_members: $.Members[*].@odata.id
-      - step_id: get_metric_report
-        description: Read each metric report's values.
-        action: GET
-        endpoint: /redfish/v1/TelemetryService/MetricReports/{MetricReportId}
-        loop_over: metric_report_members
-        loop_variable: MetricReportId
-        on_error: continue
-        extract:
-          metric_values: $.MetricValues[*].MetricValue
-    raw_endpoints:
-      - GET /redfish/v1/TelemetryService
-      - PATCH /redfish/v1/TelemetryService
-      - GET /redfish/v1/TelemetryService/MetricDefinitions
-      - GET /redfish/v1/TelemetryService/MetricDefinitions/{MetricDefinitionId}
-      - GET /redfish/v1/TelemetryService/MetricReports
-      - GET /redfish/v1/TelemetryService/MetricReports/{MetricReportId}
-    output_template: |-
-      ## Telemetry
-      | Property | Value |
-      |----------|-------|
-      | Min Collection Interval | {min_collection_interval} |
-      | Metric Type | {metric_type} |
-  - name: task_management
-    category: diagnostics
-    description: 'Monitor and manage long-running operations (firmware updates, volume builds): read the task service, list tasks, poll a task''s progress, and delete/cancel completed or stuck tasks.'
-    parameters:
-      - name: TaskId
-        type: string
-        required: false
-        description: Task to poll or delete.
-    steps:
-      - step_id: get_task_service
-        description: Read task service overview.
-        action: GET
-        endpoint: /redfish/v1/TaskService
-        extract:
-          service_state: $.Status.State
-          completed_task_policy: $.CompletedTaskOverWritePolicy
-      - step_id: list_tasks
-        description: List all tasks.
-        action: GET
-        endpoint: /redfish/v1/TaskService/Tasks
-        extract:
-          task_members: $.Members[*].@odata.id
-      - step_id: get_task
-        description: Poll each task's state and progress.
-        action: GET
-        endpoint: /redfish/v1/TaskService/Tasks/{TaskId}
-        loop_over: task_members
-        loop_variable: TaskId
-        on_error: continue
-        extract:
-          task_state: $.TaskState
-          percent_complete: $.PercentComplete
-      - step_id: delete_task
-        description: Delete/cancel a task only if completed or cancel was requested.
-        action: DELETE
-        endpoint: /redfish/v1/TaskService/Tasks/{TaskId}
-        on_error: continue
-        condition:
-          if: task_state == 'Completed' or cancel_requested == true
-          then: continue
-          else: skip
-    raw_endpoints:
-      - GET /redfish/v1/TaskService
-      - GET /redfish/v1/TaskService/Tasks
-      - GET /redfish/v1/TaskService/Tasks/{TaskId}
-      - DELETE /redfish/v1/TaskService/Tasks/{TaskId}
-    output_template: |-
-      ## Tasks
-      | Property | Value |
-      |----------|-------|
-      | Service State | {service_state} |
-      | Task State | {task_state} |
-      | Percent Complete | {percent_complete} |
+- name: discover_service_root
+  category: monitoring
+  description: Query the Redfish service root to discover the API version and the
+    top-level service links (Systems, Chassis, Managers, etc.). Usually the first
+    call when connecting to a new BMC.
+  parameters: []
+  steps:
+  - step_id: get_root
+    description: Fetch the Redfish service root document.
+    action: GET
+    endpoint: /redfish/v1
+    extract:
+      redfish_version: $.RedfishVersion
+      systems_uri: $.Systems.@odata.id
+      chassis_uri: $.Chassis.@odata.id
+      managers_uri: $.Managers.@odata.id
+  raw_endpoints:
+  - GET /redfish/v1
+  output_template: '## Redfish Service Root
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Redfish Version | {redfish_version} |
+
+    | Systems | {systems_uri} |
+
+    | Chassis | {chassis_uri} |
+
+    | Managers | {managers_uri} |'
+- name: server_health_check
+  category: monitoring
+  description: 'Run a top-to-bottom health assessment of a server: overall status,
+    power state, and processor/memory health. If overall health is not OK, it automatically
+    drills into chassis thermal data to look for a root cause.'
+  parameters:
+  - name: SystemId
+    type: string
+    required: false
+    description: Target system identifier. If omitted, the first system in the collection
+      is used.
+    default: first member of /redfish/v1/Systems
+  - name: ChassisId
+    type: string
+    required: false
+    description: Chassis to inspect for thermal data when health is degraded.
+    default: first member of /redfish/v1/Chassis
+  steps:
+  - step_id: list_systems
+    description: List all computer systems.
+    action: GET
+    endpoint: /redfish/v1/Systems
+    extract:
+      system_members: $.Members[*].@odata.id
+      system_count: $.Members@odata.count
+  - step_id: get_system
+    description: Retrieve the target system instance.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}
+    extract:
+      health_status: $.Status.Health
+      power_state: $.PowerState
+      cpu_summary_health: $.ProcessorSummary.Status.Health
+      mem_summary_health: $.MemorySummary.Status.Health
+  - step_id: list_processors
+    description: 'Deep dive: list processors. Skipped entirely (jump to summary) when
+      overall health is already OK, so a clean server returns after just two calls.'
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/Processors
+    condition:
+      if: health_status != 'OK'
+      then: continue
+      else: goto:summary
+    extract:
+      processor_members: $.Members[*].@odata.id
+  - step_id: get_processor
+    description: Read each processor's health. Stops looping as soon as a faulty CPU
+      is found (the cause is identified).
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/Processors/{ProcessorId}
+    loop_over: processor_members
+    loop_variable: ProcessorId
+    on_error: continue
+    break_if: processor_health != 'OK'
+    extract:
+      processor_health: $.Status.Health
+  - step_id: list_memory
+    description: List memory modules.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/Memory
+    extract:
+      memory_members: $.Members[*].@odata.id
+  - step_id: get_memory
+    description: Read each memory module's health. Stops looping once a faulty DIMM
+      is found.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/Memory/{MemoryId}
+    loop_over: memory_members
+    loop_variable: MemoryId
+    on_error: continue
+    break_if: memory_health != 'OK'
+    extract:
+      memory_health: $.Status.Health
+  - step_id: check_thermal
+    description: Only when overall health is degraded, pull chassis thermal data to
+      find hotspots.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/Thermal
+    condition:
+      if: health_status != 'OK'
+      then: continue
+      else: skip
+    extract:
+      temperatures: $.Temperatures[*].ReadingCelsius
+      fan_health: $.Fans[*].Status.Health
+  - step_id: summary
+    description: Terminal reporting step and jump target for the healthy fast-path.
+      Always reachable; performs no extra I/O.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}
+    extract:
+      final_health: $.Status.Health
+  next_workflows:
+  - workflow: log_collection
+    if: health_status != 'OK'
+    reason: Pull system/manager logs to root-cause a degraded server.
+  - workflow: thermal_and_power_monitoring
+    if: health_status != 'OK'
+    reason: Inspect full sensor/fan/PSU detail when health is degraded.
+  - workflow: firmware_update
+    if: health_status == 'Warning'
+    reason: A faulty component may need a firmware remediation.
+  raw_endpoints:
+  - GET /redfish/v1/Systems
+  - GET /redfish/v1/Systems/{SystemId}
+  - GET /redfish/v1/Systems/{SystemId}/Processors
+  - GET /redfish/v1/Systems/{SystemId}/Processors/{ProcessorId}
+  - GET /redfish/v1/Systems/{SystemId}/Memory
+  - GET /redfish/v1/Systems/{SystemId}/Memory/{MemoryId}
+  - GET /redfish/v1/Chassis/{ChassisId}/Thermal
+  output_template: '## Server Health: {SystemId}
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Overall Health | {health_status} |
+
+    | Power State | {power_state} |
+
+    | CPU Summary | {cpu_summary_health} |
+
+    | Memory Summary | {mem_summary_health} |'
+- name: hardware_inventory_report
+  category: monitoring
+  description: 'Produce a full asset/inventory report for a server: CPUs, memory,
+    PCIe devices and their functions, network interfaces, simple storage, and chassis-level
+    FRU/assembly and network adapter data.'
+  parameters:
+  - name: SystemId
+    type: string
+    required: true
+    description: Target system identifier.
+  - name: ChassisId
+    type: string
+    required: false
+    description: Chassis to pull FRU/assembly and network adapter data from.
+    default: first member of /redfish/v1/Chassis
+  steps:
+  - step_id: get_system
+    description: Get system to read model, serial, and manufacturer.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}
+    extract:
+      model: $.Model
+      serial: $.SerialNumber
+      manufacturer: $.Manufacturer
+  - step_id: list_pcie
+    description: List PCIe devices.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/PCIeDevices
+    extract:
+      pcie_members: $.Members[*].@odata.id
+  - step_id: get_pcie_device
+    description: Read each PCIe device.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}
+    loop_over: pcie_members
+    loop_variable: PCIeDeviceId
+    on_error: continue
+    extract:
+      pcie_name: $.Name
+      function_members: $.PCIeFunctions[*].@odata.id
+  - step_id: list_pcie_functions
+    description: List functions for the device.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}/PCIeFunctions
+    on_error: continue
+    extract:
+      function_member_ids: $.Members[*].@odata.id
+  - step_id: get_pcie_function
+    description: Read a specific PCIe function.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}/PCIeFunctions/{FunctionId}
+    on_error: continue
+    extract:
+      function_type: $.DeviceClass
+  - step_id: list_network_interfaces
+    description: List system network interfaces.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/NetworkInterfaces
+    extract:
+      netif_members: $.Members[*].@odata.id
+  - step_id: list_simple_storage
+    description: List simple storage controllers.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/SimpleStorage
+    extract:
+      simple_storage_members: $.Members[*].@odata.id
+  - step_id: get_simple_storage
+    description: Read each simple storage instance.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/SimpleStorage/{SimpleStorageId}
+    loop_over: simple_storage_members
+    loop_variable: SimpleStorageId
+    on_error: continue
+    extract:
+      devices: $.Devices[*].Name
+  - step_id: get_assembly
+    description: Read chassis assembly (FRU) data.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/Assembly
+    extract:
+      assemblies: $.Assemblies[*].Name
+  - step_id: list_network_adapters
+    description: List chassis network adapters.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/NetworkAdapters
+    extract:
+      adapter_members: $.Members[*].@odata.id
+  - step_id: get_network_adapter
+    description: Read each network adapter.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/NetworkAdapters/{NetworkAdapterId}
+    loop_over: adapter_members
+    loop_variable: NetworkAdapterId
+    on_error: continue
+    extract:
+      adapter_model: $.Model
+  raw_endpoints:
+  - GET /redfish/v1/Systems/{SystemId}
+  - GET /redfish/v1/Systems/{SystemId}/PCIeDevices
+  - GET /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}
+  - GET /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}/PCIeFunctions
+  - GET /redfish/v1/Systems/{SystemId}/PCIeDevices/{PCIeDeviceId}/PCIeFunctions/{FunctionId}
+  - GET /redfish/v1/Systems/{SystemId}/NetworkInterfaces
+  - GET /redfish/v1/Systems/{SystemId}/SimpleStorage
+  - GET /redfish/v1/Systems/{SystemId}/SimpleStorage/{SimpleStorageId}
+  - GET /redfish/v1/Chassis/{ChassisId}/Assembly
+  - GET /redfish/v1/Chassis/{ChassisId}/NetworkAdapters
+  - GET /redfish/v1/Chassis/{ChassisId}/NetworkAdapters/{NetworkAdapterId}
+  output_template: '## Hardware Inventory: {SystemId}
+
+    | Component | Value |
+
+    |----------|-------|
+
+    | Model | {model} |
+
+    | Serial | {serial} |
+
+    | Manufacturer | {manufacturer} |'
+- name: thermal_and_power_monitoring
+  category: monitoring
+  description: 'Monitor environmental health of a chassis: temperatures, fans, sensors,
+    power supplies, batteries, and aggregate power/energy consumption. Flags any component
+    whose status is not OK.'
+  parameters:
+  - name: ChassisId
+    type: string
+    required: false
+    description: Target chassis identifier. If omitted, every chassis in the collection
+      is evaluated.
+    default: all members of /redfish/v1/Chassis
+  - name: Detail
+    type: string
+    required: false
+    description: Set to 'full' to always enumerate every sensor/fan/PSU/battery. When
+      'summary' (default), per-component loops are skipped if the chassis is healthy.
+    default: summary
+  steps:
+  - step_id: list_chassis
+    description: List all chassis to evaluate.
+    action: GET
+    endpoint: /redfish/v1/Chassis
+    extract:
+      chassis_members: $.Members[*].@odata.id
+  - step_id: get_chassis
+    description: Read each chassis instance (model, health, indicator LED).
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}
+    loop_over: chassis_members
+    loop_variable: ChassisId
+    on_error: continue
+    extract:
+      chassis_health: $.Status.Health
+      chassis_model: $.Model
+  - step_id: set_indicator_led
+    description: Optionally set the chassis identify/indicator LED (e.g., to physically
+      locate a hot node).
+    action: PATCH
+    endpoint: /redfish/v1/Chassis/{ChassisId}
+    on_error: continue
+    condition:
+      if: set_led_requested == true
+      then: continue
+      else: skip
+    request_body:
+      LocationIndicatorActive: '{led_flag}'
+  - step_id: get_power
+    description: Read chassis power (voltages, consumption, supplies).
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/Power
+    extract:
+      power_consumed_watts: $.PowerControl[0].PowerConsumedWatts
+  - step_id: set_power_cap
+    description: Optionally apply a power cap / power limit on the chassis.
+    action: PATCH
+    endpoint: /redfish/v1/Chassis/{ChassisId}/Power
+    on_error: continue
+    condition:
+      if: set_power_cap_requested == true
+      then: continue
+      else: skip
+    request_body:
+      PowerControl:
+      - PowerLimit:
+          LimitInWatts: '{power_limit_watts}'
+  - step_id: get_env_metrics
+    description: Read aggregate environmental metrics.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/EnvironmentMetrics
+    extract:
+      power_watts: $.PowerWatts.Reading
+      temp_celsius: $.TemperatureCelsius.Reading
+  - step_id: get_thermal
+    description: Read thermal block (temps + fans).
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/Thermal
+    extract:
+      max_temp: $.Temperatures[*].ReadingCelsius
+      fan_health: $.Fans[*].Status.Health
+  - step_id: set_fan_policy
+    description: Optionally adjust thermal/fan settings (e.g., a fan offset or redundancy
+      mode).
+    action: PATCH
+    endpoint: /redfish/v1/Chassis/{ChassisId}/Thermal
+    on_error: continue
+    condition:
+      if: set_fan_policy_requested == true
+      then: continue
+      else: skip
+    request_body:
+      Fans: '{fan_settings}'
+  - step_id: list_sensors
+    description: List all sensors. Skipped (jump to summary) on a healthy chassis
+      unless Detail='full', avoiding a long per-sensor loop.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/Sensors
+    condition:
+      if: chassis_health != 'OK' or Detail == 'full'
+      then: continue
+      else: goto:summary
+    extract:
+      sensor_members: $.Members[*].@odata.id
+  - step_id: get_sensor
+    description: Read each sensor reading.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/Sensors/{SensorId}
+    loop_over: sensor_members
+    loop_variable: SensorId
+    on_error: continue
+    extract:
+      sensor_reading: $.Reading
+      sensor_health: $.Status.Health
+  - step_id: list_fans
+    description: List fans in the thermal subsystem.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/ThermalSubsystem/Fans
+    extract:
+      fan_members: $.Members[*].@odata.id
+  - step_id: get_fan
+    description: Read each fan.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/ThermalSubsystem/Fans/{FanId}
+    loop_over: fan_members
+    loop_variable: FanId
+    on_error: continue
+    extract:
+      fan_speed: $.SpeedPercent.Reading
+  - step_id: list_power_supplies
+    description: List power supplies.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/PowerSupplies
+    extract:
+      psu_members: $.Members[*].@odata.id
+  - step_id: get_power_supply
+    description: Read each power supply.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/PowerSupplies/{PowerSupplyId}
+    loop_over: psu_members
+    loop_variable: PowerSupplyId
+    on_error: continue
+    extract:
+      psu_health: $.Status.Health
+  - step_id: list_batteries
+    description: List batteries.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/Batteries
+    extract:
+      battery_members: $.Members[*].@odata.id
+  - step_id: get_battery
+    description: Read each battery.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/Batteries/{BatteryId}
+    loop_over: battery_members
+    loop_variable: BatteryId
+    on_error: continue
+    extract:
+      battery_soh: $.StateOfHealthPercent.Reading
+  - step_id: summary
+    description: Terminal reporting step and jump target for the healthy fast-path.
+      No extra I/O beyond a chassis re-read.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}
+    extract:
+      final_chassis_health: $.Status.Health
+  next_workflows:
+  - workflow: log_collection
+    if: chassis_health != 'OK'
+    reason: Collect chassis/manager logs when an environmental fault is detected.
+  raw_endpoints:
+  - GET /redfish/v1/Chassis
+  - GET /redfish/v1/Chassis/{ChassisId}
+  - PATCH /redfish/v1/Chassis/{ChassisId}
+  - GET /redfish/v1/Chassis/{ChassisId}/Power
+  - PATCH /redfish/v1/Chassis/{ChassisId}/Power
+  - GET /redfish/v1/Chassis/{ChassisId}/EnvironmentMetrics
+  - GET /redfish/v1/Chassis/{ChassisId}/Thermal
+  - PATCH /redfish/v1/Chassis/{ChassisId}/Thermal
+  - GET /redfish/v1/Chassis/{ChassisId}/Sensors
+  - GET /redfish/v1/Chassis/{ChassisId}/Sensors/{SensorId}
+  - GET /redfish/v1/Chassis/{ChassisId}/ThermalSubsystem/Fans
+  - GET /redfish/v1/Chassis/{ChassisId}/ThermalSubsystem/Fans/{FanId}
+  - GET /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/PowerSupplies
+  - GET /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/PowerSupplies/{PowerSupplyId}
+  - GET /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/Batteries
+  - GET /redfish/v1/Chassis/{ChassisId}/PowerSubsystem/Batteries/{BatteryId}
+  output_template: '## Thermal & Power: {ChassisId}
+
+    | Metric | Value |
+
+    |----------|-------|
+
+    | Power Consumed (W) | {power_consumed_watts} |
+
+    | Temperature (C) | {temp_celsius} |'
+- name: storage_management
+  category: configuration
+  description: 'Inventory and manage storage: enumerate storage subsystems, drives
+    and volumes, and create, modify, or delete volumes. Loops over every drive and
+    continues even if an individual drive read fails.'
+  parameters:
+  - name: SystemId
+    type: string
+    required: true
+    description: Target system identifier.
+  - name: StorageId
+    type: string
+    required: false
+    description: Storage subsystem to act on (required for volume create/delete).
+  - name: VolumeId
+    type: string
+    required: false
+    description: Volume to modify or delete.
+  - name: ChassisId
+    type: string
+    required: false
+    description: Chassis to enumerate physical drives from.
+  steps:
+  - step_id: list_storage
+    description: List storage subsystems.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/Storage
+    extract:
+      storage_members: $.Members[*].@odata.id
+  - step_id: get_storage
+    description: Read each storage subsystem and its drive links.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}
+    loop_over: storage_members
+    loop_variable: StorageId
+    on_error: continue
+    extract:
+      drive_links: $.Drives[*].@odata.id
+  - step_id: get_drive
+    description: Read each drive; continue past failures.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Drives/{DriveId}
+    loop_over: drive_links
+    loop_variable: DriveId
+    on_error: continue
+    extract:
+      drive_health: $.Status.Health
+      drive_capacity: $.CapacityBytes
+  - step_id: list_volumes
+    description: List volumes in the subsystem.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes
+    extract:
+      volume_members: $.Members[*].@odata.id
+  - step_id: get_volume
+    description: Read a specific volume.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
+    on_error: continue
+    extract:
+      volume_raid: $.RAIDType
+      volume_capacity: $.CapacityBytes
+  - step_id: create_volume
+    description: Create a new volume (only if creation was requested).
+    action: POST
+    endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes
+    condition:
+      if: create_requested == true
+      then: continue
+      else: skip
+    request_body:
+      RAIDType: '{raid_type}'
+      CapacityBytes: '{capacity_bytes}'
+      Drives: '{drive_links}'
+    extract:
+      new_volume_uri: $.@odata.id
+  - step_id: modify_volume
+    description: Modify an existing volume.
+    action: PATCH
+    endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
+    on_error: stop
+    request_body:
+      Name: '{new_volume_name}'
+  - step_id: delete_volume
+    description: Delete a volume (only if deletion was requested).
+    action: DELETE
+    endpoint: /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
+    condition:
+      if: delete_requested == true
+      then: continue
+      else: skip
+    on_error: stop
+  - step_id: list_chassis_drives
+    description: List physical drives at the chassis level.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/Drives
+    extract:
+      chassis_drive_members: $.Members[*].@odata.id
+  - step_id: get_chassis_drive
+    description: Read each chassis drive.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/Drives/{DriveId}
+    loop_over: chassis_drive_members
+    loop_variable: DriveId
+    on_error: continue
+    extract:
+      chassis_drive_health: $.Status.Health
+  raw_endpoints:
+  - GET /redfish/v1/Systems/{SystemId}/Storage
+  - GET /redfish/v1/Systems/{SystemId}/Storage/{StorageId}
+  - GET /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Drives/{DriveId}
+  - GET /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes
+  - POST /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes
+  - GET /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
+  - PATCH /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
+  - DELETE /redfish/v1/Systems/{SystemId}/Storage/{StorageId}/Volumes/{VolumeId}
+  - GET /redfish/v1/Chassis/{ChassisId}/Drives
+  - GET /redfish/v1/Chassis/{ChassisId}/Drives/{DriveId}
+  output_template: '## Storage: {SystemId}
+
+    | Item | Value |
+
+    |----------|-------|
+
+    | Volume RAID | {volume_raid} |
+
+    | Volume Capacity | {volume_capacity} |
+
+    | New Volume | {new_volume_uri} |'
+  next_workflows:
+  - workflow: task_management
+    if: new_volume_uri != null
+    reason: Volume creation is often asynchronous; track the resulting build task.
+- name: server_power_operations
+  category: lifecycle
+  description: Perform power control on a server (On, GracefulShutdown, ForceOff,
+    GracefulRestart, ForceRestart). Reads current power state first and skips the
+    reset if the server is already in the desired state.
+  parameters:
+  - name: SystemId
+    type: string
+    required: true
+    description: Target system identifier.
+  - name: ResetType
+    type: string
+    required: true
+    description: 'Reset action: On, ForceOff, GracefulShutdown, GracefulRestart, ForceRestart,
+      PowerCycle.'
+    default: GracefulRestart
+  steps:
+  - step_id: get_system
+    description: Read current power state.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}
+    extract:
+      power_state: $.PowerState
+  - step_id: reset_system
+    description: Issue the reset action unless already powered on and requesting On.
+    action: POST
+    endpoint: /redfish/v1/Systems/{SystemId}/Actions/ComputerSystem.Reset
+    condition:
+      if: power_state == 'On' and ResetType == 'On'
+      then: skip
+      else: continue
+    request_body:
+      ResetType: '{ResetType}'
+    on_error: stop
+  - step_id: patch_system
+    description: Optionally update boot override settings alongside the power action.
+    action: PATCH
+    endpoint: /redfish/v1/Systems/{SystemId}
+    on_error: continue
+    request_body:
+      Boot:
+        BootSourceOverrideTarget: '{boot_target}'
+  raw_endpoints:
+  - GET /redfish/v1/Systems/{SystemId}
+  - PATCH /redfish/v1/Systems/{SystemId}
+  - POST /redfish/v1/Systems/{SystemId}/Actions/ComputerSystem.Reset
+  output_template: '## Power Operation: {SystemId}
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Previous State | {power_state} |
+
+    | Action Issued | {ResetType} |'
+- name: bios_configuration
+  category: configuration
+  description: 'View and manage BIOS: read current attributes and boot options, modify
+    attributes, change the BIOS password, or reset BIOS to factory defaults.'
+  parameters:
+  - name: SystemId
+    type: string
+    required: true
+    description: Target system identifier.
+  - name: BootOptionId
+    type: string
+    required: false
+    description: Specific boot option to inspect.
+  steps:
+  - step_id: get_bios
+    description: Read current BIOS attributes.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/Bios
+    extract:
+      attributes: $.Attributes
+      boot_mode: $.Attributes.BootMode
+  - step_id: list_boot_options
+    description: List boot options.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/BootOptions
+    extract:
+      boot_option_members: $.Members[*].@odata.id
+  - step_id: get_boot_option
+    description: Read each boot option.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/BootOptions/{BootOptionId}
+    loop_over: boot_option_members
+    loop_variable: BootOptionId
+    on_error: continue
+    extract:
+      boot_display_name: $.DisplayName
+      boot_enabled: $.BootOptionEnabled
+  - step_id: modify_bios
+    description: Apply BIOS attribute changes (staged until next reboot).
+    action: PATCH
+    endpoint: /redfish/v1/Systems/{SystemId}/Bios
+    on_error: stop
+    condition:
+      if: modify_requested == true
+      then: continue
+      else: skip
+    request_body:
+      Attributes: '{bios_attributes}'
+  - step_id: change_bios_password
+    description: Change the BIOS password if requested.
+    action: POST
+    endpoint: /redfish/v1/Systems/{SystemId}/Bios/Actions/Bios.ChangePassword
+    condition:
+      if: password_change_requested == true
+      then: continue
+      else: skip
+    request_body:
+      PasswordName: '{password_name}'
+      OldPassword: '{old_password}'
+      NewPassword: '{new_password}'
+  - step_id: reset_bios
+    description: Reset BIOS to defaults if requested.
+    action: POST
+    endpoint: /redfish/v1/Systems/{SystemId}/Bios/Actions/Bios.ResetBios
+    condition:
+      if: reset_requested == true
+      then: continue
+      else: skip
+  raw_endpoints:
+  - GET /redfish/v1/Systems/{SystemId}/Bios
+  - PATCH /redfish/v1/Systems/{SystemId}/Bios
+  - POST /redfish/v1/Systems/{SystemId}/Bios/Actions/Bios.ResetBios
+  - POST /redfish/v1/Systems/{SystemId}/Bios/Actions/Bios.ChangePassword
+  - GET /redfish/v1/Systems/{SystemId}/BootOptions
+  - GET /redfish/v1/Systems/{SystemId}/BootOptions/{BootOptionId}
+  output_template: '## BIOS Configuration: {SystemId}
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Boot Mode | {boot_mode} |'
+- name: secure_boot_management
+  category: security
+  description: 'Inspect and manage UEFI Secure Boot: read enablement and key state,
+    enable/disable Secure Boot, and reset Secure Boot keys to factory or default sets.'
+  parameters:
+  - name: SystemId
+    type: string
+    required: true
+    description: Target system identifier.
+  steps:
+  - step_id: get_secure_boot
+    description: Read Secure Boot state.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/SecureBoot
+    extract:
+      sb_enabled: $.SecureBootEnable
+      sb_current: $.SecureBootCurrentBoot
+      sb_mode: $.SecureBootMode
+  - step_id: modify_secure_boot
+    description: Enable or disable Secure Boot.
+    action: PATCH
+    endpoint: /redfish/v1/Systems/{SystemId}/SecureBoot
+    on_error: stop
+    condition:
+      if: modify_requested == true
+      then: continue
+      else: skip
+    request_body:
+      SecureBootEnable: '{enable_flag}'
+  - step_id: reset_keys
+    description: Reset Secure Boot keys if requested.
+    action: POST
+    endpoint: /redfish/v1/Systems/{SystemId}/SecureBoot/Actions/SecureBoot.ResetKeys
+    condition:
+      if: reset_keys_requested == true
+      then: continue
+      else: skip
+    request_body:
+      ResetKeysType: '{reset_keys_type}'
+  raw_endpoints:
+  - GET /redfish/v1/Systems/{SystemId}/SecureBoot
+  - PATCH /redfish/v1/Systems/{SystemId}/SecureBoot
+  - POST /redfish/v1/Systems/{SystemId}/SecureBoot/Actions/SecureBoot.ResetKeys
+  output_template: '## Secure Boot: {SystemId}
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Enabled | {sb_enabled} |
+
+    | Mode | {sb_mode} |'
+- name: firmware_update
+  category: maintenance
+  description: Check installed firmware/software versions, trigger a firmware update
+    from a URI, and poll the resulting task to completion. If the target component
+    is already at the desired version, the update is skipped.
+  parameters:
+  - name: ImageURI
+    type: string
+    required: false
+    description: URI of the firmware image to apply.
+  - name: TargetVersion
+    type: string
+    required: false
+    description: Desired version used to decide whether an update is needed.
+  - name: SoftwareId
+    type: string
+    required: false
+    description: Specific inventory entry to inspect.
+  - name: TaskId
+    type: string
+    required: false
+    description: Task to poll (populated from the update response).
+  steps:
+  - step_id: get_update_service
+    description: Read update service capabilities.
+    action: GET
+    endpoint: /redfish/v1/UpdateService
+    extract:
+      service_state: $.Status.State
+      push_uri: $.HttpPushUri
+  - step_id: list_firmware
+    description: List installed firmware.
+    action: GET
+    endpoint: /redfish/v1/UpdateService/FirmwareInventory
+    extract:
+      firmware_members: $.Members[*].@odata.id
+  - step_id: get_firmware_item
+    description: Read each firmware entry's version.
+    action: GET
+    endpoint: /redfish/v1/UpdateService/FirmwareInventory/{SoftwareId}
+    loop_over: firmware_members
+    loop_variable: SoftwareId
+    on_error: continue
+    extract:
+      current_version: $.Version
+      fw_name: $.Name
+  - step_id: list_software
+    description: List installed software.
+    action: GET
+    endpoint: /redfish/v1/UpdateService/SoftwareInventory
+    extract:
+      software_members: $.Members[*].@odata.id
+  - step_id: get_software_item
+    description: Read each software entry.
+    action: GET
+    endpoint: /redfish/v1/UpdateService/SoftwareInventory/{SoftwareId}
+    loop_over: software_members
+    loop_variable: SoftwareId
+    on_error: continue
+    extract:
+      sw_version: $.Version
+  - step_id: configure_update_service
+    description: Optionally adjust update service settings before updating.
+    action: PATCH
+    endpoint: /redfish/v1/UpdateService
+    on_error: continue
+    condition:
+      if: configure_requested == true
+      then: continue
+      else: skip
+    request_body:
+      HttpPushUriTargetsBusy: false
+  - step_id: trigger_update
+    description: Trigger the update only if the current version differs from the target;
+      otherwise skip to reporting.
+    action: POST
+    endpoint: /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate
+    condition:
+      if: current_version != TargetVersion
+      then: continue
+      else: goto:report
+    request_body:
+      ImageURI: '{ImageURI}'
+    on_error: stop
+    extract:
+      TaskId: $.Id
+      task_uri: $.@odata.id
+  - step_id: poll_task
+    description: Poll the update task until it completes.
+    action: GET
+    endpoint: /redfish/v1/TaskService/Tasks/{TaskId}
+    on_error: continue
+    extract:
+      task_state: $.TaskState
+      task_percent: $.PercentComplete
+  - step_id: report
+    description: Final reporting step (jump target when no update is needed).
+    action: GET
+    endpoint: /redfish/v1/UpdateService/FirmwareInventory
+    extract:
+      final_members: $.Members@odata.count
+  raw_endpoints:
+  - GET /redfish/v1/UpdateService
+  - PATCH /redfish/v1/UpdateService
+  - POST /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate
+  - GET /redfish/v1/UpdateService/FirmwareInventory
+  - GET /redfish/v1/UpdateService/FirmwareInventory/{SoftwareId}
+  - GET /redfish/v1/UpdateService/SoftwareInventory
+  - GET /redfish/v1/UpdateService/SoftwareInventory/{SoftwareId}
+  - GET /redfish/v1/TaskService/Tasks/{TaskId}
+  output_template: '## Firmware Update
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Current Version | {current_version} |
+
+    | Target Version | {TargetVersion} |
+
+    | Task State | {task_state} |
+
+    | Percent Complete | {task_percent} |'
+  next_workflows:
+  - workflow: task_management
+    if: TaskId != null
+    reason: Hand off to task management to monitor or cancel the update task.
+- name: network_configuration
+  category: configuration
+  description: 'View and modify network settings on both the host system and the BMC:
+    system and manager Ethernet interfaces, plus BMC network protocol services (HTTPS,
+    SSH, IPMI).'
+  parameters:
+  - name: SystemId
+    type: string
+    required: false
+    description: Target system for host NIC config.
+  - name: ManagerId
+    type: string
+    required: false
+    description: Target manager for BMC NIC config.
+  - name: InterfaceId
+    type: string
+    required: false
+    description: Specific Ethernet interface to modify.
+  steps:
+  - step_id: list_system_nics
+    description: List system Ethernet interfaces.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/EthernetInterfaces
+    extract:
+      sys_nic_members: $.Members[*].@odata.id
+  - step_id: get_system_nic
+    description: Read each system Ethernet interface.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/EthernetInterfaces/{InterfaceId}
+    loop_over: sys_nic_members
+    loop_variable: InterfaceId
+    on_error: continue
+    extract:
+      mac: $.MACAddress
+      ipv4: $.IPv4Addresses[*].Address
+  - step_id: modify_system_nic
+    description: Modify a system Ethernet interface if requested.
+    action: PATCH
+    endpoint: /redfish/v1/Systems/{SystemId}/EthernetInterfaces/{InterfaceId}
+    on_error: stop
+    condition:
+      if: modify_system_nic == true
+      then: continue
+      else: skip
+    request_body:
+      DHCPv4:
+        DHCPEnabled: '{dhcp_enabled}'
+  - step_id: list_manager_nics
+    description: List manager (BMC) Ethernet interfaces.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/EthernetInterfaces
+    extract:
+      mgr_nic_members: $.Members[*].@odata.id
+  - step_id: get_manager_nic
+    description: Read each manager Ethernet interface.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/EthernetInterfaces/{InterfaceId}
+    loop_over: mgr_nic_members
+    loop_variable: InterfaceId
+    on_error: continue
+    extract:
+      mgr_mac: $.MACAddress
+      mgr_ipv4: $.IPv4Addresses[*].Address
+  - step_id: modify_manager_nic
+    description: Modify a manager Ethernet interface if requested.
+    action: PATCH
+    endpoint: /redfish/v1/Managers/{ManagerId}/EthernetInterfaces/{InterfaceId}
+    on_error: stop
+    condition:
+      if: modify_manager_nic == true
+      then: continue
+      else: skip
+    request_body:
+      IPv4StaticAddresses: '{static_addresses}'
+  - step_id: get_network_protocol
+    description: Read BMC network protocol/service settings.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/NetworkProtocol
+    extract:
+      ssh_enabled: $.SSH.ProtocolEnabled
+      https_port: $.HTTPS.Port
+  - step_id: modify_network_protocol
+    description: Enable/disable protocols or change ports.
+    action: PATCH
+    endpoint: /redfish/v1/Managers/{ManagerId}/NetworkProtocol
+    on_error: stop
+    condition:
+      if: modify_protocol == true
+      then: continue
+      else: skip
+    request_body:
+      SSH:
+        ProtocolEnabled: '{ssh_flag}'
+  raw_endpoints:
+  - GET /redfish/v1/Systems/{SystemId}/EthernetInterfaces
+  - GET /redfish/v1/Systems/{SystemId}/EthernetInterfaces/{InterfaceId}
+  - PATCH /redfish/v1/Systems/{SystemId}/EthernetInterfaces/{InterfaceId}
+  - GET /redfish/v1/Managers/{ManagerId}/EthernetInterfaces
+  - GET /redfish/v1/Managers/{ManagerId}/EthernetInterfaces/{InterfaceId}
+  - PATCH /redfish/v1/Managers/{ManagerId}/EthernetInterfaces/{InterfaceId}
+  - GET /redfish/v1/Managers/{ManagerId}/NetworkProtocol
+  - PATCH /redfish/v1/Managers/{ManagerId}/NetworkProtocol
+  output_template: '## Network Configuration
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | System NIC MAC | {mac} |
+
+    | Manager NIC MAC | {mgr_mac} |
+
+    | SSH Enabled | {ssh_enabled} |'
+- name: bmc_manager_operations
+  category: maintenance
+  description: 'Manage the BMC/iDRAC management controller itself: read manager details,
+    update settings, reboot the BMC, or reset it to factory defaults.'
+  parameters:
+  - name: ManagerId
+    type: string
+    required: false
+    description: Target manager identifier.
+    default: first member of /redfish/v1/Managers
+  - name: ResetType
+    type: string
+    required: false
+    description: Manager reset type (GracefulRestart, ForceRestart).
+    default: GracefulRestart
+  steps:
+  - step_id: list_managers
+    description: List management controllers.
+    action: GET
+    endpoint: /redfish/v1/Managers
+    extract:
+      manager_members: $.Members[*].@odata.id
+  - step_id: get_manager
+    description: Read the target manager.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}
+    extract:
+      firmware_version: $.FirmwareVersion
+      manager_type: $.ManagerType
+      mgr_health: $.Status.Health
+  - step_id: patch_manager
+    description: Update manager settings (e.g., datetime) if requested.
+    action: PATCH
+    endpoint: /redfish/v1/Managers/{ManagerId}
+    on_error: continue
+    condition:
+      if: modify_requested == true
+      then: continue
+      else: skip
+    request_body:
+      DateTime: '{datetime}'
+  - step_id: reset_manager
+    description: Reboot the BMC if requested.
+    action: POST
+    endpoint: /redfish/v1/Managers/{ManagerId}/Actions/Manager.Reset
+    condition:
+      if: reset_requested == true
+      then: continue
+      else: skip
+    request_body:
+      ResetType: '{ResetType}'
+    on_error: stop
+  - step_id: reset_to_defaults
+    description: Reset the BMC to factory defaults if explicitly requested.
+    action: POST
+    endpoint: /redfish/v1/Managers/{ManagerId}/Actions/Manager.ResetToDefaults
+    condition:
+      if: factory_reset_requested == true
+      then: continue
+      else: skip
+    request_body:
+      ResetType: '{factory_reset_type}'
+    on_error: stop
+  raw_endpoints:
+  - GET /redfish/v1/Managers
+  - GET /redfish/v1/Managers/{ManagerId}
+  - PATCH /redfish/v1/Managers/{ManagerId}
+  - POST /redfish/v1/Managers/{ManagerId}/Actions/Manager.Reset
+  - POST /redfish/v1/Managers/{ManagerId}/Actions/Manager.ResetToDefaults
+  output_template: '## BMC Manager: {ManagerId}
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Firmware Version | {firmware_version} |
+
+    | Type | {manager_type} |
+
+    | Health | {mgr_health} |'
+- name: user_account_management
+  category: security
+  description: 'Manage local user accounts and roles: read account service policy,
+    list/create/modify/delete accounts, and inspect role definitions and privileges.'
+  parameters:
+  - name: AccountId
+    type: string
+    required: false
+    description: Account to read, modify, or delete.
+  - name: RoleId
+    type: string
+    required: false
+    description: Role to inspect.
+  steps:
+  - step_id: get_account_service
+    description: Read account service policy (lockout, password rules).
+    action: GET
+    endpoint: /redfish/v1/AccountService
+    extract:
+      min_pw_length: $.MinPasswordLength
+      lockout_threshold: $.AccountLockoutThreshold
+  - step_id: configure_account_service
+    description: Update account policy if requested.
+    action: PATCH
+    endpoint: /redfish/v1/AccountService
+    on_error: continue
+    condition:
+      if: configure_policy == true
+      then: continue
+      else: skip
+    request_body:
+      AccountLockoutThreshold: '{lockout_threshold}'
+  - step_id: list_accounts
+    description: List user accounts.
+    action: GET
+    endpoint: /redfish/v1/AccountService/Accounts
+    extract:
+      account_members: $.Members[*].@odata.id
+  - step_id: get_account
+    description: Read each account.
+    action: GET
+    endpoint: /redfish/v1/AccountService/Accounts/{AccountId}
+    loop_over: account_members
+    loop_variable: AccountId
+    on_error: continue
+    extract:
+      username: $.UserName
+      role: $.RoleId
+      enabled: $.Enabled
+  - step_id: create_account
+    description: Create a new account if requested.
+    action: POST
+    endpoint: /redfish/v1/AccountService/Accounts
+    condition:
+      if: create_requested == true
+      then: continue
+      else: skip
+    request_body:
+      UserName: '{new_username}'
+      Password: '{new_password}'
+      RoleId: '{new_role}'
+      Enabled: true
+    extract:
+      new_account_uri: $.@odata.id
+  - step_id: modify_account
+    description: Modify an account (role, enable/disable, password) if requested.
+    action: PATCH
+    endpoint: /redfish/v1/AccountService/Accounts/{AccountId}
+    on_error: stop
+    condition:
+      if: modify_requested == true
+      then: continue
+      else: skip
+    request_body:
+      RoleId: '{updated_role}'
+      Enabled: '{enabled_flag}'
+  - step_id: delete_account
+    description: Delete an account if requested.
+    action: DELETE
+    endpoint: /redfish/v1/AccountService/Accounts/{AccountId}
+    on_error: stop
+    condition:
+      if: delete_requested == true
+      then: continue
+      else: skip
+  - step_id: list_roles
+    description: List available roles.
+    action: GET
+    endpoint: /redfish/v1/AccountService/Roles
+    extract:
+      role_members: $.Members[*].@odata.id
+  - step_id: get_role
+    description: Read each role's privileges.
+    action: GET
+    endpoint: /redfish/v1/AccountService/Roles/{RoleId}
+    loop_over: role_members
+    loop_variable: RoleId
+    on_error: continue
+    extract:
+      assigned_privileges: $.AssignedPrivileges
+  raw_endpoints:
+  - GET /redfish/v1/AccountService
+  - PATCH /redfish/v1/AccountService
+  - GET /redfish/v1/AccountService/Accounts
+  - POST /redfish/v1/AccountService/Accounts
+  - GET /redfish/v1/AccountService/Accounts/{AccountId}
+  - PATCH /redfish/v1/AccountService/Accounts/{AccountId}
+  - DELETE /redfish/v1/AccountService/Accounts/{AccountId}
+  - GET /redfish/v1/AccountService/Roles
+  - GET /redfish/v1/AccountService/Roles/{RoleId}
+  output_template: '## User Accounts
+
+    | Account | Role | Enabled |
+
+    |---------|------|---------|
+
+    | {username} | {role} | {enabled} |'
+- name: session_management
+  category: security
+  description: 'Manage authenticated Redfish sessions: read session service config,
+    list active sessions, open a new session (login), and delete sessions (logout).'
+  parameters:
+  - name: SessionId
+    type: string
+    required: false
+    description: Session to inspect or delete.
+  steps:
+  - step_id: get_session_service
+    description: Read session service config (timeout).
+    action: GET
+    endpoint: /redfish/v1/SessionService
+    extract:
+      session_timeout: $.SessionTimeout
+  - step_id: configure_session_service
+    description: Update session timeout if requested.
+    action: PATCH
+    endpoint: /redfish/v1/SessionService
+    on_error: continue
+    condition:
+      if: configure_requested == true
+      then: continue
+      else: skip
+    request_body:
+      SessionTimeout: '{session_timeout}'
+  - step_id: list_sessions
+    description: List active sessions.
+    action: GET
+    endpoint: /redfish/v1/SessionService/Sessions
+    extract:
+      session_members: $.Members[*].@odata.id
+  - step_id: create_session
+    description: Create a new session (login) if requested.
+    action: POST
+    endpoint: /redfish/v1/SessionService/Sessions
+    condition:
+      if: login_requested == true
+      then: continue
+      else: skip
+    request_body:
+      UserName: '{username}'
+      Password: '{password}'
+    extract:
+      new_session_uri: $.@odata.id
+      auth_token: $.headers.X-Auth-Token
+  - step_id: get_session
+    description: Read each session.
+    action: GET
+    endpoint: /redfish/v1/SessionService/Sessions/{SessionId}
+    loop_over: session_members
+    loop_variable: SessionId
+    on_error: continue
+    extract:
+      session_user: $.UserName
+  - step_id: delete_session
+    description: Delete a session (logout) if requested.
+    action: DELETE
+    endpoint: /redfish/v1/SessionService/Sessions/{SessionId}
+    on_error: stop
+    condition:
+      if: logout_requested == true
+      then: continue
+      else: skip
+  raw_endpoints:
+  - GET /redfish/v1/SessionService
+  - PATCH /redfish/v1/SessionService
+  - GET /redfish/v1/SessionService/Sessions
+  - POST /redfish/v1/SessionService/Sessions
+  - GET /redfish/v1/SessionService/Sessions/{SessionId}
+  - DELETE /redfish/v1/SessionService/Sessions/{SessionId}
+  output_template: '## Sessions
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Timeout | {session_timeout} |
+
+    | Active Sessions | {session_members} |'
+- name: event_subscription_management
+  category: configuration
+  description: 'Manage event/alert delivery: read event service config, list/create/modify/delete
+    subscriptions (webhook destinations), and submit a test event to validate delivery.'
+  parameters:
+  - name: SubscriptionId
+    type: string
+    required: false
+    description: Subscription to inspect, modify, or delete.
+  steps:
+  - step_id: get_event_service
+    description: Read event service config.
+    action: GET
+    endpoint: /redfish/v1/EventService
+    extract:
+      service_enabled: $.ServiceEnabled
+      delivery_retry: $.DeliveryRetryAttempts
+  - step_id: configure_event_service
+    description: Update event service config if requested.
+    action: PATCH
+    endpoint: /redfish/v1/EventService
+    on_error: continue
+    condition:
+      if: configure_requested == true
+      then: continue
+      else: skip
+    request_body:
+      DeliveryRetryAttempts: '{retry_attempts}'
+  - step_id: list_subscriptions
+    description: List event subscriptions.
+    action: GET
+    endpoint: /redfish/v1/EventService/Subscriptions
+    extract:
+      subscription_members: $.Members[*].@odata.id
+  - step_id: get_subscription
+    description: Read each subscription.
+    action: GET
+    endpoint: /redfish/v1/EventService/Subscriptions/{SubscriptionId}
+    loop_over: subscription_members
+    loop_variable: SubscriptionId
+    on_error: continue
+    extract:
+      destination: $.Destination
+      event_types: $.EventTypes
+  - step_id: create_subscription
+    description: Create a subscription if requested.
+    action: POST
+    endpoint: /redfish/v1/EventService/Subscriptions
+    condition:
+      if: create_requested == true
+      then: continue
+      else: skip
+    request_body:
+      Destination: '{destination_uri}'
+      Protocol: Redfish
+      EventTypes: '{event_types}'
+    extract:
+      new_subscription_uri: $.@odata.id
+  - step_id: modify_subscription
+    description: Modify a subscription if requested.
+    action: PATCH
+    endpoint: /redfish/v1/EventService/Subscriptions/{SubscriptionId}
+    on_error: stop
+    condition:
+      if: modify_requested == true
+      then: continue
+      else: skip
+    request_body:
+      Context: '{context}'
+  - step_id: delete_subscription
+    description: Delete a subscription if requested.
+    action: DELETE
+    endpoint: /redfish/v1/EventService/Subscriptions/{SubscriptionId}
+    on_error: stop
+    condition:
+      if: delete_requested == true
+      then: continue
+      else: skip
+  - step_id: submit_test_event
+    description: Submit a test event to validate delivery if requested.
+    action: POST
+    endpoint: /redfish/v1/EventService/Actions/EventService.SubmitTestEvent
+    condition:
+      if: test_requested == true
+      then: continue
+      else: skip
+    request_body:
+      MessageId: '{message_id}'
+  raw_endpoints:
+  - GET /redfish/v1/EventService
+  - PATCH /redfish/v1/EventService
+  - POST /redfish/v1/EventService/Actions/EventService.SubmitTestEvent
+  - GET /redfish/v1/EventService/Subscriptions
+  - POST /redfish/v1/EventService/Subscriptions
+  - GET /redfish/v1/EventService/Subscriptions/{SubscriptionId}
+  - PATCH /redfish/v1/EventService/Subscriptions/{SubscriptionId}
+  - DELETE /redfish/v1/EventService/Subscriptions/{SubscriptionId}
+  output_template: '## Event Subscriptions
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Service Enabled | {service_enabled} |
+
+    | Destination | {destination} |'
+- name: log_collection
+  category: diagnostics
+  description: Collect and analyze logs across the system, manager, and chassis log
+    services. Iterates every log service, pulls entries, and optionally clears a system
+    log. Continues past any log service that fails to read.
+  parameters:
+  - name: SystemId
+    type: string
+    required: false
+    description: System whose logs to collect.
+  - name: ManagerId
+    type: string
+    required: false
+    description: Manager whose logs to collect.
+  - name: ChassisId
+    type: string
+    required: false
+    description: Chassis whose log services to enumerate.
+  - name: LogServiceId
+    type: string
+    required: false
+    description: Specific log service id.
+  - name: EntryId
+    type: string
+    required: false
+    description: Specific log entry id.
+  steps:
+  - step_id: list_system_logs
+    description: List system log services.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/LogServices
+    extract:
+      sys_logsvc_members: $.Members[*].@odata.id
+  - step_id: get_system_log_service
+    description: Read each system log service.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}
+    loop_over: sys_logsvc_members
+    loop_variable: LogServiceId
+    on_error: continue
+    extract:
+      log_service_name: $.Name
+      overwrite_policy: $.OverWritePolicy
+  - step_id: list_system_log_entries
+    description: List entries for a system log service.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Entries
+    on_error: continue
+    extract:
+      entry_members: $.Members[*].@odata.id
+      entry_count: $.Members@odata.count
+  - step_id: get_system_log_entry
+    description: Read a specific system log entry.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Entries/{EntryId}
+    on_error: continue
+    extract:
+      entry_message: $.Message
+      entry_severity: $.Severity
+  - step_id: clear_system_log
+    description: Clear the system log only if explicitly requested.
+    action: POST
+    endpoint: /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Actions/LogService.ClearLog
+    condition:
+      if: clear_requested == true
+      then: continue
+      else: skip
+    on_error: stop
+  - step_id: list_manager_logs
+    description: List manager log services.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/LogServices
+    on_error: continue
+    extract:
+      mgr_logsvc_members: $.Members[*].@odata.id
+  - step_id: get_manager_log_service
+    description: Read each manager log service.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}
+    loop_over: mgr_logsvc_members
+    loop_variable: LogServiceId
+    on_error: continue
+    extract:
+      mgr_log_name: $.Name
+  - step_id: list_manager_log_entries
+    description: List manager log entries.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}/Entries
+    on_error: continue
+    extract:
+      mgr_entry_members: $.Members[*].@odata.id
+  - step_id: get_manager_log_entry
+    description: Read a specific manager log entry.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}/Entries/{EntryId}
+    on_error: continue
+    extract:
+      mgr_entry_message: $.Message
+  - step_id: list_chassis_logs
+    description: List chassis log services.
+    action: GET
+    endpoint: /redfish/v1/Chassis/{ChassisId}/LogServices
+    on_error: continue
+    extract:
+      chassis_logsvc_members: $.Members[*].@odata.id
+  raw_endpoints:
+  - GET /redfish/v1/Systems/{SystemId}/LogServices
+  - GET /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}
+  - GET /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Entries
+  - GET /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Entries/{EntryId}
+  - POST /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Actions/LogService.ClearLog
+  - GET /redfish/v1/Managers/{ManagerId}/LogServices
+  - GET /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}
+  - GET /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}/Entries
+  - GET /redfish/v1/Managers/{ManagerId}/LogServices/{LogServiceId}/Entries/{EntryId}
+  - GET /redfish/v1/Chassis/{ChassisId}/LogServices
+  output_template: '## Log Collection
+
+    | Source | Entries |
+
+    |--------|---------|
+
+    | System Log | {entry_count} |
+
+    | Last Severity | {entry_severity} |'
+- name: certificate_management
+  category: security
+  description: 'Manage TLS certificates: read the certificate service, view and delete
+    manager certificates, generate a CSR, and replace an existing certificate.'
+  parameters:
+  - name: ManagerId
+    type: string
+    required: false
+    description: Manager whose certificates to manage.
+  - name: CertificateId
+    type: string
+    required: false
+    description: Certificate to view or delete.
+  steps:
+  - step_id: get_cert_service
+    description: Read certificate service.
+    action: GET
+    endpoint: /redfish/v1/CertificateService
+    extract:
+      csr_action: $.Actions.['#CertificateService.GenerateCSR'].target
+  - step_id: list_manager_certs
+    description: List certificates on the manager.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/Certificates
+    extract:
+      cert_members: $.Members[*].@odata.id
+  - step_id: get_manager_cert
+    description: Read each certificate.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/Certificates/{CertificateId}
+    loop_over: cert_members
+    loop_variable: CertificateId
+    on_error: continue
+    extract:
+      subject: $.Subject.CommonName
+      valid_not_after: $.ValidNotAfter
+  - step_id: generate_csr
+    description: Generate a CSR if requested.
+    action: POST
+    endpoint: /redfish/v1/CertificateService/Actions/CertificateService.GenerateCSR
+    condition:
+      if: csr_requested == true
+      then: continue
+      else: skip
+    request_body:
+      CommonName: '{common_name}'
+      Organization: '{org}'
+      CertificateCollection: '{cert_collection_uri}'
+    extract:
+      csr_string: $.CSRString
+  - step_id: replace_certificate
+    description: Replace an existing certificate if requested.
+    action: POST
+    endpoint: /redfish/v1/CertificateService/Actions/CertificateService.ReplaceCertificate
+    condition:
+      if: replace_requested == true
+      then: continue
+      else: skip
+    request_body:
+      CertificateUri: '{certificate_uri}'
+      CertificateString: '{certificate_string}'
+      CertificateType: PEM
+  - step_id: delete_certificate
+    description: Delete a certificate if requested.
+    action: DELETE
+    endpoint: /redfish/v1/Managers/{ManagerId}/Certificates/{CertificateId}
+    on_error: stop
+    condition:
+      if: delete_requested == true
+      then: continue
+      else: skip
+  raw_endpoints:
+  - GET /redfish/v1/CertificateService
+  - POST /redfish/v1/CertificateService/Actions/CertificateService.GenerateCSR
+  - POST /redfish/v1/CertificateService/Actions/CertificateService.ReplaceCertificate
+  - GET /redfish/v1/Managers/{ManagerId}/Certificates
+  - GET /redfish/v1/Managers/{ManagerId}/Certificates/{CertificateId}
+  - DELETE /redfish/v1/Managers/{ManagerId}/Certificates/{CertificateId}
+  output_template: '## Certificates
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Subject | {subject} |
+
+    | Valid Until | {valid_not_after} |'
+- name: virtual_media_operations
+  category: lifecycle
+  description: Mount and unmount virtual media (ISO images) on either the system or
+    the manager, e.g. to boot an OS installer over the network. Inspects current media
+    state before inserting.
+  parameters:
+  - name: SystemId
+    type: string
+    required: false
+    description: System target for virtual media.
+  - name: ManagerId
+    type: string
+    required: false
+    description: Manager target for virtual media.
+  - name: VirtualMediaId
+    type: string
+    required: false
+    description: Specific virtual media device id.
+  - name: ImageURI
+    type: string
+    required: false
+    description: URI of the ISO/IMG image to mount.
+  steps:
+  - step_id: list_system_vm
+    description: List system virtual media devices.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/VirtualMedia
+    extract:
+      sys_vm_members: $.Members[*].@odata.id
+  - step_id: get_system_vm
+    description: Read a system virtual media device's state.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}
+    on_error: continue
+    extract:
+      inserted: $.Inserted
+      image: $.Image
+  - step_id: configure_system_vm
+    description: Patch virtual media settings (e.g., WriteProtected) if requested.
+    action: PATCH
+    endpoint: /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}
+    on_error: continue
+    condition:
+      if: configure_requested == true
+      then: continue
+      else: skip
+    request_body:
+      WriteProtected: true
+  - step_id: insert_system_media
+    description: Insert media on the system only if nothing is currently inserted.
+    action: POST
+    endpoint: /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.InsertMedia
+    condition:
+      if: inserted == false
+      then: continue
+      else: goto:eject_system_media
+    request_body:
+      Image: '{ImageURI}'
+      Inserted: true
+      WriteProtected: true
+    on_error: stop
+  - step_id: eject_system_media
+    description: Eject media from the system if requested.
+    action: POST
+    endpoint: /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.EjectMedia
+    condition:
+      if: eject_requested == true
+      then: continue
+      else: skip
+    on_error: continue
+  - step_id: list_manager_vm
+    description: List manager virtual media devices.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/VirtualMedia
+    on_error: continue
+    extract:
+      mgr_vm_members: $.Members[*].@odata.id
+  - step_id: get_manager_vm
+    description: Read a manager virtual media device's state.
+    action: GET
+    endpoint: /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}
+    on_error: continue
+    extract:
+      mgr_inserted: $.Inserted
+  - step_id: configure_manager_vm
+    description: Patch manager virtual media settings if requested.
+    action: PATCH
+    endpoint: /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}
+    on_error: continue
+    condition:
+      if: configure_requested == true
+      then: continue
+      else: skip
+    request_body:
+      WriteProtected: true
+  - step_id: insert_manager_media
+    description: Insert media on the manager if requested.
+    action: POST
+    endpoint: /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.InsertMedia
+    condition:
+      if: insert_manager_requested == true
+      then: continue
+      else: skip
+    request_body:
+      Image: '{ImageURI}'
+      Inserted: true
+    on_error: stop
+  - step_id: eject_manager_media
+    description: Eject media on the manager if requested.
+    action: POST
+    endpoint: /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.EjectMedia
+    condition:
+      if: eject_manager_requested == true
+      then: continue
+      else: skip
+    on_error: continue
+  raw_endpoints:
+  - GET /redfish/v1/Systems/{SystemId}/VirtualMedia
+  - GET /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}
+  - PATCH /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}
+  - POST /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.InsertMedia
+  - POST /redfish/v1/Systems/{SystemId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.EjectMedia
+  - GET /redfish/v1/Managers/{ManagerId}/VirtualMedia
+  - GET /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}
+  - PATCH /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}
+  - POST /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.InsertMedia
+  - POST /redfish/v1/Managers/{ManagerId}/VirtualMedia/{VirtualMediaId}/Actions/VirtualMedia.EjectMedia
+  output_template: '## Virtual Media
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Inserted | {inserted} |
+
+    | Image | {image} |'
+- name: telemetry_metrics_collection
+  category: monitoring
+  description: 'Collect time-series telemetry: read the telemetry service, enumerate
+    metric definitions, and pull metric reports for trending and capacity analysis.'
+  parameters:
+  - name: MetricDefinitionId
+    type: string
+    required: false
+    description: Specific metric definition to inspect.
+  - name: MetricReportId
+    type: string
+    required: false
+    description: Specific metric report to retrieve.
+  steps:
+  - step_id: get_telemetry_service
+    description: Read telemetry service config.
+    action: GET
+    endpoint: /redfish/v1/TelemetryService
+    extract:
+      min_collection_interval: $.MinCollectionInterval
+  - step_id: configure_telemetry
+    description: Update telemetry service config if requested.
+    action: PATCH
+    endpoint: /redfish/v1/TelemetryService
+    on_error: continue
+    condition:
+      if: configure_requested == true
+      then: continue
+      else: skip
+    request_body:
+      ServiceEnabled: true
+  - step_id: list_metric_definitions
+    description: List metric definitions.
+    action: GET
+    endpoint: /redfish/v1/TelemetryService/MetricDefinitions
+    extract:
+      metric_def_members: $.Members[*].@odata.id
+  - step_id: get_metric_definition
+    description: Read each metric definition.
+    action: GET
+    endpoint: /redfish/v1/TelemetryService/MetricDefinitions/{MetricDefinitionId}
+    loop_over: metric_def_members
+    loop_variable: MetricDefinitionId
+    on_error: continue
+    extract:
+      metric_type: $.MetricType
+      units: $.Units
+  - step_id: list_metric_reports
+    description: List metric reports.
+    action: GET
+    endpoint: /redfish/v1/TelemetryService/MetricReports
+    extract:
+      metric_report_members: $.Members[*].@odata.id
+  - step_id: get_metric_report
+    description: Read each metric report's values.
+    action: GET
+    endpoint: /redfish/v1/TelemetryService/MetricReports/{MetricReportId}
+    loop_over: metric_report_members
+    loop_variable: MetricReportId
+    on_error: continue
+    extract:
+      metric_values: $.MetricValues[*].MetricValue
+  raw_endpoints:
+  - GET /redfish/v1/TelemetryService
+  - PATCH /redfish/v1/TelemetryService
+  - GET /redfish/v1/TelemetryService/MetricDefinitions
+  - GET /redfish/v1/TelemetryService/MetricDefinitions/{MetricDefinitionId}
+  - GET /redfish/v1/TelemetryService/MetricReports
+  - GET /redfish/v1/TelemetryService/MetricReports/{MetricReportId}
+  output_template: '## Telemetry
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Min Collection Interval | {min_collection_interval} |
+
+    | Metric Type | {metric_type} |'
+- name: task_management
+  category: diagnostics
+  description: 'Monitor and manage long-running operations (firmware updates, volume
+    builds): read the task service, list tasks, poll a task''s progress, and delete/cancel
+    completed or stuck tasks.'
+  parameters:
+  - name: TaskId
+    type: string
+    required: false
+    description: Task to poll or delete.
+  steps:
+  - step_id: get_task_service
+    description: Read task service overview.
+    action: GET
+    endpoint: /redfish/v1/TaskService
+    extract:
+      service_state: $.Status.State
+      completed_task_policy: $.CompletedTaskOverWritePolicy
+  - step_id: list_tasks
+    description: List all tasks.
+    action: GET
+    endpoint: /redfish/v1/TaskService/Tasks
+    extract:
+      task_members: $.Members[*].@odata.id
+  - step_id: get_task
+    description: Poll each task's state and progress.
+    action: GET
+    endpoint: /redfish/v1/TaskService/Tasks/{TaskId}
+    loop_over: task_members
+    loop_variable: TaskId
+    on_error: continue
+    extract:
+      task_state: $.TaskState
+      percent_complete: $.PercentComplete
+  - step_id: delete_task
+    description: Delete/cancel a task only if completed or cancel was requested.
+    action: DELETE
+    endpoint: /redfish/v1/TaskService/Tasks/{TaskId}
+    on_error: continue
+    condition:
+      if: task_state == 'Completed' or cancel_requested == true
+      then: continue
+      else: skip
+  raw_endpoints:
+  - GET /redfish/v1/TaskService
+  - GET /redfish/v1/TaskService/Tasks
+  - GET /redfish/v1/TaskService/Tasks/{TaskId}
+  - DELETE /redfish/v1/TaskService/Tasks/{TaskId}
+  output_template: '## Tasks
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Service State | {service_state} |
+
+    | Task State | {task_state} |
+
+    | Percent Complete | {percent_complete} |'
+- name: health_guarded_firmware_update
+  category: maintenance
+  description: Check server health first and only proceed with a firmware update when
+    the system is healthy.
+  parameters:
+  - name: SystemId
+    type: string
+    required: true
+    description: Target system identifier.
+  - name: ImageURI
+    type: string
+    required: true
+    description: Firmware image location.
+  steps:
+  - step_id: get_system_health
+    description: Read the target system health status.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}
+    extract:
+      health_status: $.Status.Health
+  - step_id: simple_update
+    description: Trigger the update only when the server is healthy.
+    action: POST
+    endpoint: /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate
+    condition:
+      if: health_status == 'OK'
+      then: continue
+      else: skip
+    request_body:
+      ImageURI: '{ImageURI}'
+  - step_id: poll_update_service
+    description: Confirm update service state after the request.
+    action: GET
+    endpoint: /redfish/v1/UpdateService
+    extract:
+      service_state: $.Status.State
+  raw_endpoints:
+  - GET /redfish/v1/Systems/{SystemId}
+  - POST /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate
+  - GET /redfish/v1/UpdateService
+  output_template: '## Firmware Update
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Health | {health_status} |
+
+    | Update Service State | {service_state} |'
+- name: clear_system_logs
+  category: diagnostics
+  description: Inspect the log services and clear the selected system event log.
+  parameters:
+  - name: SystemId
+    type: string
+    required: true
+    description: Target system identifier.
+  - name: LogServiceId
+    type: string
+    required: false
+    description: Log service to clear.
+    default: SystemEventLog
+  steps:
+  - step_id: list_log_services
+    description: List the available log services.
+    action: GET
+    endpoint: /redfish/v1/Systems/{SystemId}/LogServices
+    extract:
+      log_members: $.Members[*].@odata.id
+  - step_id: clear_log
+    description: Clear the selected log service.
+    action: POST
+    endpoint: /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Actions/LogService.ClearLog
+    request_body: {}
+  raw_endpoints:
+  - GET /redfish/v1/Systems/{SystemId}/LogServices
+  - POST /redfish/v1/Systems/{SystemId}/LogServices/{LogServiceId}/Actions/LogService.ClearLog
+  output_template: '## Log Maintenance
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Log Service | {LogServiceId} |'
