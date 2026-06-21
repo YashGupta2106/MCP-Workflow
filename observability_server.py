@@ -38,7 +38,7 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).parent))
 
 from observability_engine import ObservabilityEngine
-
+import nl_workflow_generator
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
@@ -124,6 +124,48 @@ async def get_workflow(name: str):
     if detail is None:
         raise HTTPException(status_code=404, detail=f"Workflow '{name}' not found")
     return JSONResponse(content=detail)
+
+
+# ---------------------------------------------------------------------------
+#  Natural Language Workflow Generator
+# ---------------------------------------------------------------------------
+
+@app.post("/api/generate_workflow")
+async def generate_workflow_api(request: Request):
+    """Generate a workflow from natural language and hot-reload."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+        
+    prompt = body.get("prompt")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt is required")
+        
+    logger.info("Generating workflow for prompt: %s", prompt)
+    
+    # Call the generator
+    yaml_content = nl_workflow_generator.generate_workflow_yaml(prompt)
+    if not yaml_content:
+        raise HTTPException(status_code=500, detail="Failed to generate workflow YAML")
+        
+    # Append to workflows.yaml
+    success = nl_workflow_generator.append_workflow(yaml_content)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to append workflow to YAML file")
+        
+    # Hot-reload the engine
+    engine._raw = engine._load_workflows(engine.workflows_file)
+    engine._workflow_map = {
+        wf["name"]: wf for wf in engine._raw.get("workflows", [])
+    }
+    logger.info("WorkflowEngine hot-reloaded successfully. Now has %d workflows.", len(engine._workflow_map))
+    
+    return JSONResponse(content={
+        "success": True,
+        "yaml": yaml_content,
+        "message": "Workflow generated and loaded successfully"
+    })
 
 
 # ---------------------------------------------------------------------------
