@@ -2,19 +2,19 @@
   "person5_calculated": true,
   "tool_counts": {
     "before_tools": 133,
-    "after_tools": 24,
-    "workflow_tools": 21,
+    "after_tools": 25,
+    "workflow_tools": 22,
     "meta_tools": 3,
-    "tool_reduction_count": 109,
-    "tool_reduction_pct": 82.0,
+    "tool_reduction_count": 108,
+    "tool_reduction_pct": 81.2,
     "meets_80pct_threshold": true
   },
   "token_counts": {
     "full_spec_before_tokens": 410562,
-    "mcp_tool_descriptions_tokens": 3058,
+    "mcp_tool_descriptions_tokens": 3157,
     "raw_as_tools_tokens": 12084,
-    "vs_raw_as_tools_reduction_pct": 74.7,
-    "vs_full_spec_reduction_pct": 99.3
+    "vs_raw_as_tools_reduction_pct": 73.9,
+    "vs_full_spec_reduction_pct": 99.2
   },
   "workflow_breakdown": [
     {
@@ -163,6 +163,13 @@
       "step_count": 2,
       "raw_endpoints_covered": 2,
       "parameters": 2
+    },
+    {
+      "name": "firmware_update_workflow",
+      "category": "maintenance",
+      "step_count": 2,
+      "raw_endpoints_covered": 2,
+      "parameters": 2
     }
   ],
   "categories": {
@@ -170,7 +177,7 @@
     "configuration": 4,
     "lifecycle": 2,
     "security": 4,
-    "maintenance": 3,
+    "maintenance": 4,
     "diagnostics": 3
   }
 }

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "redfish-workflow-proxy": {
+      "command": "C:\\Users\\goura\\Desktop\\MCP-Workflow\\venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\goura\\Desktop\\MCP-Workflow\\mcp_server.py"
+      ],
+      "env": {}
+    }
+  }
+}
