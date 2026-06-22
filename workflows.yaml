@@ -1,8 +1,8 @@
 meta:
   spec_source: DMTF Redfish API
   generated_by: claude
-  total_workflows: 22
-  total_raw_endpoints: 143
+  total_workflows: 21
+  total_raw_endpoints: 133
   schema_extensions:
     note: 'The following optional fields extend the base schema. They are backward-compatible:
       a runtime that does not understand them can ignore them and the workflow still
@@ -1998,28 +1998,3 @@ workflows:
     |----------|-------|
 
     | Log Service | {LogServiceId} |'
-- name: custom_create_a_workflow_that_resets_the_manage
-  category: diagnostics
-  description: 'Generated workflow for: create a workflow that resets the manager
-    and check tasks service'
-  parameters:
-  - name: SystemId
-    type: string
-    required: true
-    description: Target system identifier.
-  steps:
-  - step_id: get_system
-    description: Fetch the target system as a safe default action.
-    action: GET
-    endpoint: /redfish/v1/Systems/{SystemId}
-    extract:
-      system_health: $.Status.Health
-  raw_endpoints:
-  - GET /redfish/v1/Systems/{SystemId}
-  output_template: '## Custom Workflow
-
-    | Property | Value |
-
-    |----------|-------|
-
-    | Health | {system_health} |'
