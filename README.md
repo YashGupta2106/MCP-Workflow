@@ -148,7 +148,7 @@ Save the file and **fully restart Claude Desktop**.
 In a terminal, run:
 
 ```bash
-npx @stoplight/prism-cli mock specs/merged/full_spec_local.yaml --port 4010
+npx.cmd @stoplight/prism-cli mock specs/merged/full_spec_local.yaml --port 4010
 ```
 
 > Use `full_spec_local.yaml` (not `full_spec.yaml`) — it has all external schema refs resolved locally so Prism doesn't need internet access.
