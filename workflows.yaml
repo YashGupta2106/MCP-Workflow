@@ -1,8 +1,8 @@
 meta:
   spec_source: DMTF Redfish API
   generated_by: claude
-  total_workflows: 21
-  total_raw_endpoints: 133
+  total_workflows: 22
+  total_raw_endpoints: 144
   schema_extensions:
     note: 'The following optional fields extend the base schema. They are backward-compatible:
       a runtime that does not understand them can ignore them and the workflow still
@@ -1998,3 +1998,43 @@ workflows:
     |----------|-------|
 
     | Log Service | {LogServiceId} |'
+- name: firmware_update_workflow
+  category: maintenance
+  description: Check the update service and trigger a firmware update request for
+    the target server.
+  parameters:
+  - name: SystemId
+    type: string
+    required: true
+    description: Target system identifier.
+  - name: ImageURI
+    type: string
+    required: true
+    description: Firmware image location.
+  steps:
+  - step_id: get_update_service
+    description: Read the update service metadata.
+    action: GET
+    endpoint: /redfish/v1/UpdateService
+    extract:
+      service_state: $.Status.State
+  - step_id: simple_update
+    description: Submit a firmware update job.
+    action: POST
+    endpoint: /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate
+    request_body:
+      ImageURI: '{ImageURI}'
+    extract:
+      task_uri: $.@odata.id
+  raw_endpoints:
+  - GET /redfish/v1/UpdateService
+  - POST /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate
+  output_template: '## Firmware Update
+
+    | Property | Value |
+
+    |----------|-------|
+
+    | Update Service State | {service_state} |
+
+    | Task | {task_uri} |'
