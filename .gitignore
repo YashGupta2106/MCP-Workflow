@@ -13,3 +13,4 @@ build/
 .env
 verify_mcp.py
 .vscode/
+claude_desktop_config_snippet.json
