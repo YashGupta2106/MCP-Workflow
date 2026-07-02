@@ -25,12 +25,14 @@ from collections import Counter
 # Token counting (same approach as Person 1's parse_spec.py)
 # ---------------------------------------------------------------------------
 def count_tokens(text: str) -> int:
-    """Count tokens using tiktoken (cl100k_base). Falls back to char/4."""
+    """Count tokens using tiktoken (cl100k_base). Falls back to char/4 if
+    tiktoken is unavailable or cannot download its encoding file (offline)."""
     try:
         import tiktoken
         enc = tiktoken.get_encoding("cl100k_base")
         return len(enc.encode(text))
-    except ImportError:
+    except Exception:
+        # Fallback: ~4 chars per token (GPT-4 average)
         return len(text) // 4
 
 
